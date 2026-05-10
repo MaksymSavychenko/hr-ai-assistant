@@ -1,0 +1,13 @@
+request_id,employee_username,employee_name,manager_username,request_type,request_text,leave_date,leave_year,created_date,status
+1,anna,Anna Kovalenko,olena,Birthday Leave,"Subject: Birthday Leave Request
+
+Dear HR Team,
+
+My name is Anna Kovalenko from the Sales department. I kindly request one day of birthday leave on 2026-05-23.
+
+My manager is olena.
+
+Please review and approve this request.
+
+Best regards,
+Anna Kovalenko",2026-05-23,2026,2026-05-10,Approved

@@ -1,0 +1,5 @@
+username,password,name,department,role,manager_username,hire_date,birthday,vacation_days,email
+anna,1234,Anna Kovalenko,Sales,employee,olena,2022-04-15,1991-05-23,12,anna.kovalenko@company.com
+mark,1234,Mark Johnson,Finance,employee,olena,2021-09-01,1988-11-22,8,mark.johnson@company.com
+sofia,1234,Sofia Miller,HR,employee,olena,2023-01-20,1995-03-05,15,sofia.miller@company.com
+olena,1234,Olena Petrenko,Management,manager,,2019-02-11,1987-08-17,20,olena.petrenko@company.com
