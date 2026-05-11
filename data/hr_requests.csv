@@ -1,13 +1,12 @@
-request_id,employee_username,employee_name,manager_username,request_type,request_text,leave_date,leave_year,created_date,status
-1,anna,Anna Kovalenko,olena,Birthday Leave,"Subject: Birthday Leave Request
-
-Dear HR Team,
-
-My name is Anna Kovalenko from the Sales department. I kindly request one day of birthday leave on 2026-05-23.
-
-My manager is olena.
-
-Please review and approve this request.
-
-Best regards,
-Anna Kovalenko",2026-05-23,2026,2026-05-10,Approved
+request_id,employee_id,request_type,request_text,request_date,leave_start_date,leave_end_date,working_days_requested,status,manager_username,approval_required,approval_level,policy_check_result,rejection_reason,source_channel
+HRR-2026-001,E001,birthday_leave,"I kindly request one day of birthday leave on 2026-06-18.",2026-06-10,2026-06-18,2026-06-18,1,Approved,dmitri.sokolov,TRUE,Manager,"PASS: probation completed, request submitted 3+ working days in advance, and date is within +/-30 days of birthday.",,portal
+HRR-2026-002,E006,birthday_leave,"Requesting birthday leave on 2026-05-28.",2026-05-20,2026-05-28,2026-05-28,1,Rejected,kateryna.melnyk,TRUE,Manager,"FAIL: employee is still in probation period.",Employee has not completed probation yet.,teams
+HRR-2026-003,E003,birthday_leave,"Please approve birthday leave on 2026-05-20.",2026-05-12,2026-05-20,2026-05-20,1,Rejected,iryna.koval,TRUE,Manager,"FAIL: birthday leave entitlement has already been fully used.",Birthday leave balance is 0 for 2026.,portal
+HRR-2026-004,E005,birthday_leave,"I request birthday leave on my birthday date in October.",2026-05-15,2026-10-02,2026-10-02,1,Rejected,oliver.grant,TRUE,Manager,"FAIL: requested date is outside the allowed birthday leave window.",Birthday leave can only be requested within +/-30 days from birthday.,email
+HRR-2026-005,E004,annual_leave,"Annual leave request for personal travel.",2026-07-01,2026-07-21,2026-07-25,5,Approved,serhii.bondar,TRUE,Manager,"PASS: submitted at least 14 days before leave start.",,portal
+HRR-2026-006,E005,annual_leave,"Annual leave request submitted on short notice.",2026-08-10,2026-08-18,2026-08-20,3,Approved,oliver.grant,TRUE,Manager,"WARNING: submitted less than 14 days in advance; approved exceptionally by manager.",,slack
+HRR-2026-007,E002,annual_leave,"Requesting two weeks annual leave in September.",2026-09-01,2026-09-14,2026-09-25,10,Rejected,dmitri.sokolov,TRUE,Manager,"FAIL: requested days exceed remaining annual leave balance.",Insufficient annual leave balance.,portal
+HRR-2026-008,E001,annual_leave,"Requesting extended annual leave in June.",2026-05-20,2026-06-08,2026-06-16,7,Pending,dmitri.sokolov,TRUE,Head of Department,"CHECK: Sales June request is more than 5 consecutive working days; HoD approval required.",,teams
+HRR-2026-009,E002,annual_leave,"Requesting annual leave in June for family event.",2026-05-25,2026-06-22,2026-06-26,5,Approved,dmitri.sokolov,TRUE,Manager,"PASS: Sales June request is 5 or fewer working days; standard manager approval.",,portal
+HRR-2026-010,E005,annual_leave,"Using carry-over day before end of March.",2026-03-10,2026-03-24,2026-03-24,1,Approved,oliver.grant,TRUE,Manager,"PASS: carry-over leave used before 2026-03-31 expiry.",,email
+HRR-2026-011,E005,annual_leave,"Requesting carry-over day after March.",2026-04-05,2026-04-18,2026-04-18,1,Rejected,oliver.grant,TRUE,Manager,"FAIL: carry-over balance expired after 2026-03-31.",Carry-over leave expired on 2026-03-31.,portal

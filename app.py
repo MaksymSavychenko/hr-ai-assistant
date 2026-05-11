@@ -1,8 +1,10 @@
 from datetime import date, datetime
+from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
-from src.auth import authenticate_user, get_user_profile
+from src.auth import authenticate_user, get_user_profile, load_users
 from src.requests import (
     create_request,
     get_employee_requests,
@@ -10,6 +12,9 @@ from src.requests import (
     has_active_birthday_request,
     update_request_status,
 )
+
+
+LEAVE_BALANCES_FILE = Path(__file__).resolve().parent / "data" / "leave_balances.csv"
 
 
 st.set_page_config(
@@ -39,6 +44,35 @@ if "last_message" not in st.session_state:
 # -----------------------------
 # HELPERS
 # -----------------------------
+
+def load_leave_balances():
+    """Load leave balances snapshot from CSV."""
+    if not LEAVE_BALANCES_FILE.exists():
+        return pd.DataFrame()
+    return pd.read_csv(LEAVE_BALANCES_FILE).fillna("")
+
+
+def get_leave_balance_value(employee_id, leave_type, field_name, default_value=0):
+    """
+    Return one leave balance value for the current year and employee.
+    Example fields: entitlement_days, used_days, remaining_days.
+    """
+    balances = load_leave_balances()
+    if balances.empty:
+        return default_value
+
+    current_year = date.today().year
+    row = balances[
+        (balances["employee_id"].astype(str) == str(employee_id))
+        & (balances["calendar_year"].astype(str) == str(current_year))
+        & (balances["leave_type"].astype(str) == str(leave_type))
+    ]
+
+    if row.empty:
+        return default_value
+
+    return row.iloc[0].get(field_name, default_value)
+
 
 def get_birthday_leave_date_this_year(birthday_str):
     """
@@ -75,12 +109,12 @@ def build_birthday_request_text(user):
     request_text = (
         "Subject: Birthday Leave Request\n\n"
         "Dear HR Team,\n\n"
-        f"My name is {user['name']} from the {user['department']} department. "
+        f"My name is {user['full_name']} from the {user['department']} department. "
         f"I kindly request one day of birthday leave on {leave_date.isoformat()}.\n\n"
         f"My manager is {user['manager_username']}.\n\n"
         "Please review and approve this request.\n\n"
         "Best regards,\n"
-        f"{user['name']}"
+        f"{user['full_name']}"
     )
     return request_text, leave_date
 
@@ -96,6 +130,15 @@ def is_birthday_request_prompt(question):
         "birthday leave application",
     ]
     return any(trigger in q for trigger in triggers)
+
+
+def get_employee_name_map():
+    """Build employee_id -> full_name mapping for manager view."""
+    users = load_users()
+    mapping = {}
+    for username, profile in users.items():
+        mapping[str(profile.get("employee_id", ""))] = profile.get("full_name", username)
+    return mapping
 
 
 # -----------------------------
@@ -123,11 +166,14 @@ def login_screen():
 # -----------------------------
 
 def employee_portal(user):
+    annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
+    birthday_remaining = get_leave_balance_value(user["employee_id"], "birthday_leave", "remaining_days", 0)
+
     st.title("HR AI Assistant Portal")
-    st.write(f"Welcome, **{user['name']}**.")
+    st.write(f"Welcome, **{user['full_name']}**.")
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
-    metric_col1.metric("Vacation Days", str(user["vacation_days"]))
+    metric_col1.metric("Annual Leave Remaining", str(annual_remaining))
     metric_col2.metric("Department", user["department"])
     metric_col3.metric("Manager", user["manager_username"] or "-")
 
@@ -163,12 +209,15 @@ def employee_portal(user):
             q = question.lower()
 
             if is_birthday_request_prompt(question):
-                draft_text, leave_date = build_birthday_request_text(user)
-                if not draft_text:
-                    st.write("Birthday leave can be requested only within 30 days before your birthday.")
+                if float(birthday_remaining) <= 0:
+                    st.write("You have already submitted or used birthday leave for this year.")
                 else:
-                    st.write("I generated a formal birthday leave request draft for you below.")
-                    st.session_state.birthday_request_draft = draft_text
+                    draft_text, _ = build_birthday_request_text(user)
+                    if not draft_text:
+                        st.write("Birthday leave can be requested only within 30 days before your birthday.")
+                    else:
+                        st.write("I generated a formal birthday leave request draft for you below.")
+                        st.session_state.birthday_request_draft = draft_text
 
             elif "birthday leave" in q:
                 eligible, leave_date = is_birthday_leave_eligible(user["birthday"])
@@ -181,7 +230,7 @@ def employee_portal(user):
                     st.write("Birthday leave can be requested only within 30 days before your birthday.")
 
             elif "vacation" in q:
-                st.write(f"You currently have {user['vacation_days']} vacation days available.")
+                st.write(f"You currently have {annual_remaining} annual leave days remaining.")
 
             elif "sick" in q:
                 st.write("Please notify your manager and submit a medical certificate through the HR portal.")
@@ -207,12 +256,12 @@ def employee_portal(user):
 
             if not eligible:
                 st.warning("Birthday leave can be requested only within 30 days before your birthday.")
-            elif has_active_birthday_request(user["username"], leave_date.year):
+            elif has_active_birthday_request(user["employee_id"], leave_date.year):
                 st.warning("You have already submitted or used birthday leave for this year.")
             else:
                 create_request(
                     employee_profile=user,
-                    request_type="Birthday Leave",
+                    request_type="birthday_leave",
                     request_text=st.session_state.birthday_request_draft,
                     leave_date=leave_date.isoformat(),
                     leave_year=str(leave_date.year),
@@ -230,19 +279,19 @@ def employee_portal(user):
         st.session_state.last_message = None
 
     st.subheader("My HR Requests")
-    employee_requests = get_employee_requests(user["username"])
+    employee_requests = get_employee_requests(user["employee_id"])
 
     if employee_requests.empty:
         st.info("No HR requests yet.")
     else:
         st.table(
             employee_requests[
-                ["request_type", "leave_date", "created_date", "status"]
+                ["request_type", "leave_start_date", "request_date", "status"]
             ].rename(
                 columns={
                     "request_type": "Request Type",
-                    "leave_date": "Leave Date",
-                    "created_date": "Created Date",
+                    "leave_start_date": "Leave Date",
+                    "request_date": "Created Date",
                     "status": "Status",
                 }
             )
@@ -254,10 +303,11 @@ def employee_portal(user):
 # -----------------------------
 
 def manager_portal(user):
-    st.title("Manager Approval Portal")
-    st.write(f"Welcome, **{user['name']}**.")
-
+    name_map = get_employee_name_map()
     pending_requests = get_manager_pending_requests(user["username"])
+
+    st.title("Manager Approval Portal")
+    st.write(f"Welcome, **{user['full_name']}**.")
     st.metric("Pending Requests", int(len(pending_requests)))
 
     if pending_requests.empty:
@@ -268,12 +318,14 @@ def manager_portal(user):
 
     for _, request_row in pending_requests.iterrows():
         request_id = request_row["request_id"]
+        employee_id = str(request_row["employee_id"])
+        employee_name = name_map.get(employee_id, employee_id)
 
         with st.container(border=True):
-            st.write(f"**Employee:** {request_row['employee_name']}")
+            st.write(f"**Employee:** {employee_name} ({employee_id})")
             st.write(f"**Request type:** {request_row['request_type']}")
-            st.write(f"**Leave date:** {request_row['leave_date'] or '-'}")
-            st.write(f"**Created date:** {request_row['created_date']}")
+            st.write(f"**Leave date:** {request_row['leave_start_date'] or '-'}")
+            st.write(f"**Created date:** {request_row['request_date']}")
             st.write(f"**Status:** {request_row['status']}")
             st.write("**Request text:**")
             st.write(request_row["request_text"])
@@ -306,13 +358,16 @@ def main_app():
     # Include username in profile for request creation.
     user = {**profile, "username": username}
 
+    annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
+
     st.sidebar.header("Employee Profile")
-    st.sidebar.write(f"Name: {user['name']}")
+    st.sidebar.write(f"Name: {user['full_name']}")
+    st.sidebar.write(f"Employee ID: {user['employee_id']}")
     st.sidebar.write(f"Role: {user['role']}")
     st.sidebar.write(f"Department: {user['department']}")
     st.sidebar.write(f"Hire date: {user['hire_date']}")
     st.sidebar.write(f"Birthday: {user['birthday']}")
-    st.sidebar.write(f"Vacation days: {user['vacation_days']}")
+    st.sidebar.write(f"Annual leave remaining: {annual_remaining}")
     st.sidebar.write(f"Manager username: {user['manager_username'] or '-'}")
     st.sidebar.write(f"Email: {user['email']}")
 
@@ -323,7 +378,7 @@ def main_app():
         st.session_state.last_message = None
         st.rerun()
 
-    if user["role"] == "manager":
+    if str(user["role"]).lower() == "manager":
         manager_portal(user)
     else:
         employee_portal(user)

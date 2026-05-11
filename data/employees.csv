@@ -1,5 +1,12 @@
-username,password,name,department,role,manager_username,hire_date,birthday,vacation_days,email
-anna,1234,Anna Kovalenko,Sales,employee,olena,2022-04-15,1991-05-23,12,anna.kovalenko@company.com
-mark,1234,Mark Johnson,Finance,employee,olena,2021-09-01,1988-11-22,8,mark.johnson@company.com
-sofia,1234,Sofia Miller,HR,employee,olena,2023-01-20,1995-03-05,15,sofia.miller@company.com
-olena,1234,Olena Petrenko,Management,manager,,2019-02-11,1987-08-17,20,olena.petrenko@company.com
+employee_id,username,full_name,department,role,manager_username,hire_date,probation_end_date,birthday,employment_type,employment_percentage,office_location,active_status,email
+E001,laura.chen,Laura Chen,Sales,employee,dmitri.sokolov,2023-02-15,2023-08-15,1992-06-18,full-time,100,Kyiv,TRUE,laura.chen@aurorahr.example
+E002,omar.khan,Omar Khan,Sales,employee,dmitri.sokolov,2024-05-20,2024-11-20,1990-06-25,full-time,100,Warsaw,TRUE,omar.khan@aurorahr.example
+E003,nina.petrov,Nina Petrov,HR,employee,iryna.koval,2022-01-10,2022-07-10,1989-05-20,full-time,100,Kyiv,TRUE,nina.petrov@aurorahr.example
+E004,victor.lee,Victor Lee,IT,employee,serhii.bondar,2021-11-01,2022-05-01,1991-04-14,part-time,60,Prague,TRUE,victor.lee@aurorahr.example
+E005,elena.rossi,Elena Rossi,Finance,employee,oliver.grant,2020-09-14,2021-03-14,1987-10-02,full-time,100,Berlin,TRUE,elena.rossi@aurorahr.example
+E006,grace.nowak,Grace Nowak,Operations,employee,kateryna.melnyk,2026-03-01,2026-09-01,1998-05-25,full-time,100,Kyiv,TRUE,grace.nowak@aurorahr.example
+E007,dmitri.sokolov,Dmitri Sokolov,Sales,manager,,2018-06-11,2018-12-11,1985-12-03,full-time,100,Kyiv,TRUE,dmitri.sokolov@aurorahr.example
+E008,iryna.koval,Iryna Koval,HR,manager,,2017-04-24,2017-10-24,1984-09-12,full-time,100,Warsaw,TRUE,iryna.koval@aurorahr.example
+E009,serhii.bondar,Serhii Bondar,IT,manager,,2016-08-02,2017-02-02,1983-07-27,full-time,100,Prague,TRUE,serhii.bondar@aurorahr.example
+E010,oliver.grant,Oliver Grant,Finance,manager,,2015-02-16,2015-08-16,1980-03-29,full-time,100,Berlin,TRUE,oliver.grant@aurorahr.example
+E011,kateryna.melnyk,Kateryna Melnyk,Operations,manager,,2019-01-21,2019-07-21,1988-01-09,full-time,100,Kyiv,TRUE,kateryna.melnyk@aurorahr.example

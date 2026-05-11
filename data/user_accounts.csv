@@ -1,0 +1,12 @@
+user_id,employee_id,username,password,account_status
+U001,E001,laura.chen,test123,active
+U002,E002,omar.khan,test123,active
+U003,E003,nina.petrov,test123,active
+U004,E004,victor.lee,test123,active
+U005,E005,elena.rossi,test123,active
+U006,E006,grace.nowak,test123,active
+U007,E007,dmitri.sokolov,test123,active
+U008,E008,iryna.koval,test123,active
+U009,E009,serhii.bondar,test123,active
+U010,E010,oliver.grant,test123,active
+U011,E011,kateryna.melnyk,test123,active

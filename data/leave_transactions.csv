@@ -1,0 +1,39 @@
+transaction_id,employee_id,leave_type,transaction_date,days,transaction_type,related_request_id,comment
+LTX-2026-0001,E001,annual_leave,2026-01-01,20,accrual,,Annual leave accrual for 2026
+LTX-2026-0002,E002,annual_leave,2026-01-01,20,accrual,,Annual leave accrual for 2026
+LTX-2026-0003,E003,annual_leave,2026-01-01,20,accrual,,Annual leave accrual for 2026
+LTX-2026-0004,E004,annual_leave,2026-01-01,12,accrual,,Pro-rated annual leave accrual for 60% part-time employee
+LTX-2026-0005,E005,annual_leave,2026-01-01,20,accrual,,Annual leave accrual for 2026
+LTX-2026-0006,E006,annual_leave,2026-01-01,20,accrual,,Annual leave accrual for 2026
+LTX-2026-0007,E001,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0008,E002,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0009,E003,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0010,E004,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0011,E005,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0012,E006,birthday_leave,2026-01-01,2,accrual,,Birthday leave entitlement for 2026
+LTX-2026-0013,E001,sick_leave,2026-01-01,10,accrual,,Sick leave allocation for 2026
+LTX-2026-0014,E002,sick_leave,2026-01-01,10,accrual,,Sick leave allocation for 2026
+LTX-2026-0015,E003,sick_leave,2026-01-01,10,accrual,,Sick leave allocation for 2026
+LTX-2026-0016,E004,sick_leave,2026-01-01,6,accrual,,Pro-rated sick leave allocation for part-time employee
+LTX-2026-0017,E005,sick_leave,2026-01-01,10,accrual,,Sick leave allocation for 2026
+LTX-2026-0018,E006,sick_leave,2026-01-01,10,accrual,,Sick leave allocation for 2026
+LTX-2026-0019,E002,annual_leave,2026-01-01,2,carry_over,,Carry-over from 2025 annual leave
+LTX-2026-0020,E004,annual_leave,2026-01-01,2,carry_over,,Carry-over from 2025 annual leave
+LTX-2026-0021,E005,annual_leave,2026-01-01,3,carry_over,,Carry-over from 2025 annual leave
+LTX-2026-0022,E005,annual_leave,2026-04-01,-2,expiry,,Unused carry-over expired after 2026-03-31
+LTX-2026-0023,E005,annual_leave,2026-03-24,-1,used,HRR-2026-010,Carry-over day used before expiry
+LTX-2026-0024,E004,annual_leave,2026-07-21,-5,used,HRR-2026-005,Approved annual leave usage
+LTX-2026-0025,E005,annual_leave,2026-08-18,-3,used,HRR-2026-006,Approved short-notice annual leave usage
+LTX-2026-0026,E002,annual_leave,2026-06-22,-5,used,HRR-2026-009,Approved June annual leave usage
+LTX-2026-0027,E001,birthday_leave,2026-06-18,-1,used,HRR-2026-001,Approved birthday leave usage
+LTX-2026-0028,E003,birthday_leave,2026-02-19,-2,used,,Birthday leave already consumed earlier in the year
+LTX-2026-0029,E001,annual_leave,2026-02-14,-4,used,,Approved annual leave used in Q1
+LTX-2026-0030,E002,annual_leave,2026-03-03,-8,used,,Approved annual leave used in Q1
+LTX-2026-0031,E002,annual_leave,2026-03-31,-2,adjustment,,Manual correction after audit
+LTX-2026-0032,E003,annual_leave,2026-03-11,-5,used,,Approved annual leave used in Q1
+LTX-2026-0033,E001,sick_leave,2026-02-05,-1,used,,Sick leave day used
+LTX-2026-0034,E002,sick_leave,2026-01-22,-2,used,,Sick leave days used
+LTX-2026-0035,E004,sick_leave,2026-02-17,-1,used,,Sick leave day used
+LTX-2026-0036,E005,sick_leave,2026-01-15,-3,used,,Sick leave days used
+LTX-2026-0037,E002,unpaid_leave,2026-04-03,-1,used,,Unpaid leave day recorded
+LTX-2026-0038,E006,unpaid_leave,2026-04-28,-2,used,,Unpaid leave for personal reasons
