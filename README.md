@@ -164,7 +164,7 @@ Use the following usernames from `data/user_accounts.csv` with:
 - CSV is not concurrent-safe like a real database
 - no hashing or enterprise auth
 - policy checks are intentionally scoped to core course requirements
-- no OpenAI/RAG integration yet (prepared for later phase)
+- RAG is backend-only right now (not connected to Streamlit UI yet)
 
 ## 12) Planned Next Step
 
@@ -189,6 +189,8 @@ Implemented components:
 - OpenAI embeddings
 - FAISS vector index creation
 - Local FAISS retrieval testing
+- LLM answer synthesis from retrieved context (LangChain + ChatOpenAI)
+- Source-grounded response packaging (`answer`, `sources`, `retrieved_chunks`)
 
 Current RAG flow:
 
@@ -208,6 +210,12 @@ OpenAI Embeddings
 FAISS Vector Store
         ↓
 Retriever Test
+        ↓
+Grounded Prompt Builder
+        ↓
+ChatOpenAI (Temperature = 0)
+        ↓
+Final Answer + Sources
 ```
 
 Test commands:
@@ -216,6 +224,7 @@ Test commands:
 .venv/bin/python scripts/test_notion_loader.py
 .venv/bin/python scripts/build_faiss_index.py
 .venv/bin/python scripts/test_faiss_retriever.py
+.venv/bin/python scripts/test_rag_answer.py
 ```
 
 Important:
@@ -236,8 +245,21 @@ OPENAI_API_KEY=...
 
 Current RAG status:
 
-`Notion ingestion + FAISS retrieval working`
+`Notion ingestion + FAISS retrieval + LLM grounded answer synthesis working`
+
+RAG indexing behavior:
+
+- `scripts/build_faiss_index.py` performs a **full rebuild** each run.
+- The script overwrites:
+  - `vector_store/faiss_index/index.faiss`
+  - `vector_store/faiss_index/metadata.json`
+- The new index contains only the records currently loaded from Notion.
+
+Notion status filter behavior:
+
+- Only records with `Status = Active` are indexed.
+- Records with `Status = Archived` are skipped and do not enter the vector store.
 
 Next step:
 
-Connect retriever output to LLM answer generation and then integrate with Streamlit UI.
+Integrate the RAG answer pipeline into Streamlit chat UI with response streaming and source rendering.
