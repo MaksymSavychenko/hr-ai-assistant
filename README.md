@@ -169,3 +169,75 @@ Use the following usernames from `data/user_accounts.csv` with:
 ## 12) Planned Next Step
 
 Replace CSV data-access modules with SQL repositories while keeping Streamlit UI and workflow logic stable.
+
+## RAG Module Status
+
+The project now includes an initial RAG backend prototype.
+
+Implemented components:
+
+- Notion integration for HR Knowledge Base
+- Loading active records from Notion database
+- Support for mixed content types:
+  - Notion text pages
+  - PDF attachments
+  - EML email files
+- Attachment detection and downloading
+- Text extraction from PDF and EML files
+- Document normalization
+- Chunking
+- OpenAI embeddings
+- FAISS vector index creation
+- Local FAISS retrieval testing
+
+Current RAG flow:
+
+```text
+Notion HR Knowledge Base
+        ↓
+Notion Loader
+        ↓
+PDF / EML / Notion Text Extraction
+        ↓
+Document Normalization
+        ↓
+Chunking
+        ↓
+OpenAI Embeddings
+        ↓
+FAISS Vector Store
+        ↓
+Retriever Test
+```
+
+Test commands:
+
+```bash
+.venv/bin/python scripts/test_notion_loader.py
+.venv/bin/python scripts/build_faiss_index.py
+.venv/bin/python scripts/test_faiss_retriever.py
+```
+
+Important:
+
+The following files and folders should not be committed to GitHub:
+
+- `.env`
+- `vector_store/`
+- `data/tmp/`
+
+The `.env` file should contain local secrets:
+
+```env
+NOTION_TOKEN=...
+NOTION_DATABASE_ID=...
+OPENAI_API_KEY=...
+```
+
+Current RAG status:
+
+`Notion ingestion + FAISS retrieval working`
+
+Next step:
+
+Connect retriever output to LLM answer generation and then integrate with Streamlit UI.
