@@ -1,4 +1,3 @@
-import os
 import re
 from email import policy
 from email.parser import BytesParser
@@ -6,9 +5,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from dotenv import load_dotenv
 from notion_client import Client
 from pypdf import PdfReader
+
+from src.config.secrets import require_secret
 
 
 DOWNLOAD_DIR = Path("data/tmp/notion_downloads")
@@ -24,14 +24,13 @@ class NotionLoader:
     """
 
     def __init__(self, notion_token=None, database_id=None):
-        load_dotenv()
-        self.notion_token = notion_token or os.getenv("NOTION_TOKEN")
-        self.database_id = database_id or os.getenv("NOTION_DATABASE_ID")
+        self.notion_token = notion_token or require_secret("NOTION_TOKEN")
+        self.database_id = database_id or require_secret("NOTION_DATABASE_ID")
 
         if not self.notion_token:
-            raise ValueError("NOTION_TOKEN is missing. Set it in .env")
+            raise ValueError("NOTION_TOKEN is missing. Provide it in .env or Streamlit secrets.")
         if not self.database_id:
-            raise ValueError("NOTION_DATABASE_ID is missing. Set it in .env")
+            raise ValueError("NOTION_DATABASE_ID is missing. Provide it in .env or Streamlit secrets.")
 
         self.client = Client(auth=self.notion_token)
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -202,39 +201,65 @@ class NotionLoader:
         return "\n".join(text_parts).strip()
 
     @staticmethod
-    def _extract_eml_text(file_path):
+    def _extract_eml_data(file_path):
+        """
+        Extract standard email headers and clean body text from .eml file.
+        Returns:
+        - combined_text_for_embedding
+        - email_metadata (dict)
+        """
         raw_bytes = file_path.read_bytes()
         message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
 
-        subject = message.get("subject", "")
-        sender = message.get("from", "")
-        sent_date = message.get("date", "")
+        subject = (message.get("subject", "") or "").strip()
+        sender = (message.get("from", "") or "").strip()
+        recipient = (message.get("to", "") or "").strip()
+        sent_date = (message.get("date", "") or "").strip()
+        message_id = (message.get("message-id", "") or "").strip()
 
         body_parts = []
         if message.is_multipart():
             for part in message.walk():
                 content_type = part.get_content_type()
-                if content_type == "text/plain":
+                content_disposition = part.get_content_disposition()
+
+                # Keep only plain text body parts and skip attached files.
+                if content_type == "text/plain" and content_disposition != "attachment":
                     body_parts.append(part.get_content() or "")
         else:
             body_parts.append(message.get_content() or "")
 
         body_text = "\n".join(body_parts).strip()
-        header = f"Subject: {subject}\nFrom: {sender}\nDate: {sent_date}\n"
-        return f"{header}\n{body_text}".strip()
+        header_text = (
+            f"EMAIL SUBJECT: {subject}\n"
+            f"EMAIL FROM: {sender}\n"
+            f"EMAIL TO: {recipient}\n"
+            f"EMAIL DATE: {sent_date}\n"
+            f"EMAIL MESSAGE-ID: {message_id}"
+        )
+        combined_text = f"{header_text}\n\n{body_text}".strip()
+
+        email_metadata = {
+            "email_subject": subject,
+            "email_from": sender,
+            "email_to": recipient,
+            "email_date": sent_date,
+            "email_message_id": message_id,
+        }
+        return combined_text, email_metadata
 
     def _extract_attachment_text(self, attachment, local_path):
         attachment_type = attachment.get("attachment_type", "other")
 
         if not local_path:
-            return ""
+            return "", {}
 
         if attachment_type == "pdf":
-            return self._extract_pdf_text(local_path)
+            return self._extract_pdf_text(local_path), {}
         if attachment_type == "eml":
-            return self._extract_eml_text(local_path)
+            return self._extract_eml_data(local_path)
 
-        return ""
+        return "", {}
 
     def _query_all_records_from_database_endpoint(self):
         results = []
@@ -351,12 +376,14 @@ class NotionLoader:
 
                 local_path = None
                 extracted_text = ""
+                email_metadata = {}
 
                 try:
                     local_path = self._download_attachment(attachment)
-                    extracted_text = self._extract_attachment_text(attachment, local_path)
+                    extracted_text, email_metadata = self._extract_attachment_text(attachment, local_path)
                 except Exception as error:
                     extracted_text = f"[Attachment extraction failed: {error}]"
+                    email_metadata = {}
 
                 if extracted_text:
                     attachment_text_parts.append(extracted_text)
@@ -369,6 +396,11 @@ class NotionLoader:
                         "local_path": str(local_path) if local_path else "",
                         "source": attachment.get("source", ""),
                         "extracted_text": extracted_text,
+                        "email_subject": email_metadata.get("email_subject", ""),
+                        "email_from": email_metadata.get("email_from", ""),
+                        "email_to": email_metadata.get("email_to", ""),
+                        "email_date": email_metadata.get("email_date", ""),
+                        "email_message_id": email_metadata.get("email_message_id", ""),
                         "title": title,
                         "category": category,
                         "content_type": content_type,

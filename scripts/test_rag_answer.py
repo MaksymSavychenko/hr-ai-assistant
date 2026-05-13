@@ -9,11 +9,7 @@ from src.rag.rag_pipeline import ask_hr_knowledge_base
 
 
 TEST_QUESTIONS = [
-    "Can an employee on probation use birthday leave?",
-    "What are the Sales department June vacation restrictions?",
-    "How many birthday leave days are allowed and what is the request window?",
-    "Can I carry over annual leave and when does it expire?",
-    "What is the official company gym reimbursement policy?",
+    "Can an employee Omar Khan take birthday leave on May 13?"
 ]
 
 

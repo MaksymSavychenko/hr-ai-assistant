@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Dict, List
 
 from langchain_core.output_parsers import StrOutputParser
@@ -5,6 +6,8 @@ from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI
 
 from src.rag.faiss_store import FaissStoreBuilder
+from src.rag.chunking import chunk_documents
+from src.rag.notion_loader import load_active_notion_documents
 from src.rag.prompts import get_hr_rag_prompt
 
 
@@ -73,6 +76,31 @@ def _build_unique_sources(retrieved_chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
+def is_faiss_index_ready(index_dir: str = INDEX_DIR) -> bool:
+    """Check if FAISS index files exist."""
+    base_path = Path(index_dir)
+    return (base_path / "index.faiss").exists() and (base_path / "metadata.json").exists()
+
+
+def ensure_faiss_index_ready(index_dir: str = INDEX_DIR) -> bool:
+    """
+    Ensure FAISS index exists.
+    Returns True if index was built in this call, False if it already existed.
+    """
+    if is_faiss_index_ready(index_dir):
+        return False
+
+    documents = load_active_notion_documents()
+    chunks = chunk_documents(documents, chunk_size=900, chunk_overlap=180)
+    if not chunks:
+        raise ValueError("Could not build FAISS index: no chunks were generated from Notion documents.")
+
+    builder = FaissStoreBuilder()
+    index, records = builder.build_index(chunks)
+    builder.save_index(index, records, index_dir)
+    return True
+
+
 def ask_hr_knowledge_base(question: str, top_k: int = 6, model_name: str = "gpt-4o-mini") -> Dict:
     """
     End-to-end RAG answering:
@@ -84,6 +112,9 @@ def ask_hr_knowledge_base(question: str, top_k: int = 6, model_name: str = "gpt-
     """
     if not question or not question.strip():
         raise ValueError("Question must not be empty.")
+
+    # Make index available on demand (cloud-friendly startup).
+    ensure_faiss_index_ready(INDEX_DIR)
 
     # STEP 1 + STEP 2: load store and retrieve chunks
     retriever = FaissStoreBuilder()

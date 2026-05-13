@@ -46,10 +46,20 @@ def main():
                 if not extracted_preview:
                     extracted_preview = "(no extracted text)"
 
-                print(
-                    f" - {attachment.get('attachment_name', 'unnamed_attachment')} "
-                    f"[{attachment_type}] -> {extracted_preview}"
-                )
+                if attachment_type == "eml":
+                    print(
+                        f" - {attachment.get('attachment_name', 'unnamed_attachment')} [eml]"
+                    )
+                    print(f"   email_subject: {attachment.get('email_subject', '')}")
+                    print(f"   email_from: {attachment.get('email_from', '')}")
+                    print(f"   email_to: {attachment.get('email_to', '')}")
+                    print(f"   email_date: {attachment.get('email_date', '')}")
+                    print(f"   text_preview: {extracted_preview}")
+                else:
+                    print(
+                        f" - {attachment.get('attachment_name', 'unnamed_attachment')} "
+                        f"[{attachment_type}] -> {extracted_preview}"
+                    )
         print()
 
 

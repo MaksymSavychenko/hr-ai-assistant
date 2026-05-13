@@ -1,12 +1,12 @@
 import json
-import os
 from pathlib import Path
 from typing import Dict, List
 
 import faiss
 import numpy as np
-from dotenv import load_dotenv
 from openai import OpenAI
+
+from src.config.secrets import require_secret
 
 
 DEFAULT_EMBED_MODEL = "text-embedding-3-small"
@@ -18,10 +18,7 @@ class FaissStoreBuilder:
     """
 
     def __init__(self, embedding_model: str = DEFAULT_EMBED_MODEL):
-        load_dotenv()
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is missing. Set it in .env")
+        api_key = require_secret("OPENAI_API_KEY")
 
         self.client = OpenAI(api_key=api_key)
         self.embedding_model = embedding_model
