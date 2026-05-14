@@ -11,6 +11,7 @@ from src.requests import (
     get_manager_pending_requests,
     update_request_status,
 )
+from src.rules.birthday_leave_service import check_birthday_leave_eligibility
 
 
 LEAVE_BALANCES_FILE = Path(__file__).resolve().parent / "data" / "leave_balances.csv"
@@ -132,10 +133,18 @@ def run_policy_qa_query(question: str):
             st.info("Building HR knowledge base index. This may take a moment.")
             with st.spinner("Building HR knowledge base index. This may take a moment."):
                 # Fixed retrieval depth for transparent comparison in UI.
-                st.session_state.policy_qa_result = ask_hr_knowledge_base(question.strip(), top_k=5)
+                st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                    question.strip(),
+                    employee_context=st.session_state.get("policy_qa_employee_context"),
+                    top_k=5,
+                )
         else:
             # Fixed retrieval depth for transparent comparison in UI.
-            st.session_state.policy_qa_result = ask_hr_knowledge_base(question.strip(), top_k=5)
+            st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                question.strip(),
+                employee_context=st.session_state.get("policy_qa_employee_context"),
+                top_k=5,
+            )
     except FileNotFoundError:
         st.session_state.policy_qa_result = None
         st.warning(
@@ -181,6 +190,9 @@ def render_policy_qa_section():
     st.caption(
         "This assistant answers questions based on HR knowledge base documents. "
         "It does not make personal eligibility decisions."
+    )
+    st.caption(
+        "Your answer may be personalized based on your employee profile, such as department."
     )
 
     st.markdown("**Example questions**")
@@ -279,6 +291,114 @@ def render_policy_qa_section():
                 st.divider()
 
 
+def _build_employee_selector_options():
+    """Return employee usernames for Decision Support mode."""
+    users = load_users()
+    employee_usernames = []
+
+    for username, profile in users.items():
+        if str(profile.get("role", "")).lower() == "employee":
+            employee_usernames.append(username)
+
+    return sorted(employee_usernames)
+
+
+def render_decision_support_section(default_employee_username: str):
+    """
+    Flow 2 (Experimental):
+    Deterministic policy evaluation using RAG-extracted rules + Python evaluator.
+    """
+    st.subheader("Decision Support (Flow 2 Experimental)")
+    st.warning("Experimental deterministic policy evaluation mode.")
+
+    employee_options = _build_employee_selector_options()
+    if not employee_options:
+        st.info("No employees available for evaluation.")
+        return
+
+    default_index = 0
+    if default_employee_username in employee_options:
+        default_index = employee_options.index(default_employee_username)
+
+    with st.form("decision_support_form"):
+        employee_username = st.selectbox(
+            "Employee",
+            options=employee_options,
+            index=default_index,
+        )
+        leave_type = st.selectbox("Leave type", options=["Birthday Leave"], index=0)
+        requested_leave_date = st.date_input("Requested leave date", value=date.today())
+
+        submitted = st.form_submit_button("Evaluate eligibility", use_container_width=True)
+
+    if not submitted:
+        return
+
+    if leave_type != "Birthday Leave":
+        st.info("Only Birthday Leave is available in this experimental mode.")
+        return
+
+    try:
+        result = check_birthday_leave_eligibility(
+            employee_username=employee_username,
+            requested_leave_date=requested_leave_date.isoformat(),
+        )
+    except FileNotFoundError:
+        st.warning(
+            "Knowledge base index is not built yet. Please run scripts/build_faiss_index.py."
+        )
+        return
+    except Exception as exc:
+        st.error("Could not run deterministic evaluation right now.")
+        st.caption(f"Error: {exc}")
+        return
+
+    st.markdown("### Eligibility result")
+    if result.get("eligible"):
+        st.success("Eligible")
+    else:
+        st.error("Not eligible")
+
+    st.markdown("### Manager approval")
+    if result.get("requires_manager_approval"):
+        st.info("Required")
+    else:
+        st.info("Not required")
+
+    st.markdown("### Passed conditions")
+    passed_conditions = result.get("passed_conditions", [])
+    if not passed_conditions:
+        st.write("- None")
+    else:
+        for item in passed_conditions:
+            description = item.get("description", "")
+            details = item.get("details", "")
+            line = details if details else description
+            st.markdown(f"- {line}")
+
+    st.markdown("### Failed conditions")
+    failed_conditions = result.get("failed_conditions", [])
+    if not failed_conditions:
+        st.write("- None")
+    else:
+        for item in failed_conditions:
+            description = item.get("description", "")
+            details = item.get("details", "") or item.get("reason", "")
+            line = details if details else description
+            st.markdown(f"- {line}")
+
+    st.markdown("### LLM explanation")
+    st.write(result.get("explanation", "No explanation available."))
+
+    st.markdown("### Policy sources")
+    policy_sources = list(dict.fromkeys(result.get("policy_sources", [])))
+    if not policy_sources:
+        st.write("No policy sources available.")
+    else:
+        for source in policy_sources:
+            st.markdown(f"- {source}")
+
+
 def get_employee_name_map():
     """Build employee_id -> full_name mapping for manager view."""
     users = load_users()
@@ -323,7 +443,34 @@ def employee_portal(user):
     metric_col2.metric("Department", user["department"])
     metric_col3.metric("Manager", user["manager_username"] or "-")
 
-    render_policy_qa_section()
+    mode = st.radio(
+        "Assistant mode",
+        options=["Policy Q&A (Flow 1)", "Decision Support (Flow 2 Experimental)"],
+        horizontal=True,
+    )
+
+    # Flow 1 context payload for personalized policy interpretation (not decisions).
+    probation_completed = None
+    probation_end = str(user.get("probation_end_date", "")).strip()
+    if probation_end:
+        try:
+            probation_completed = date.today() >= datetime.strptime(probation_end, "%Y-%m-%d").date()
+        except ValueError:
+            probation_completed = None
+
+    st.session_state.policy_qa_employee_context = {
+        "full_name": user.get("full_name", ""),
+        "username": user.get("username", ""),
+        "department": user.get("department", ""),
+        "manager_username": user.get("manager_username", ""),
+        "probation_completed": probation_completed,
+        "employment_type": user.get("employment_type", ""),
+    }
+
+    if mode == "Policy Q&A (Flow 1)":
+        render_policy_qa_section()
+    else:
+        render_decision_support_section(default_employee_username=user["username"])
 
     st.divider()
     st.subheader("My HR Requests")
