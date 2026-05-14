@@ -5,11 +5,10 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import authenticate_user, get_user_profile, load_users
+from src.rag.rag_pipeline import ask_hr_knowledge_base, is_faiss_index_ready
 from src.requests import (
-    create_request,
     get_employee_requests,
     get_manager_pending_requests,
-    has_active_birthday_request,
     update_request_status,
 )
 
@@ -34,11 +33,11 @@ if "logged_in" not in st.session_state:
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
 
-if "birthday_request_draft" not in st.session_state:
-    st.session_state.birthday_request_draft = None
+if "policy_qa_result" not in st.session_state:
+    st.session_state.policy_qa_result = None
 
-if "last_message" not in st.session_state:
-    st.session_state.last_message = None
+if "policy_qa_question" not in st.session_state:
+    st.session_state.policy_qa_question = ""
 
 
 # -----------------------------
@@ -79,6 +78,9 @@ def get_birthday_leave_date_this_year(birthday_str):
     Build leave date from birthday month/day plus current year.
     Example: 1991-05-23 -> 2026-05-23
     """
+    # MVP deterministic business logic.
+    # In Flow 2, these hardcoded policy parameters will be replaced
+    # by policy-driven rules extracted from the RAG knowledge base.
     today = date.today()
     birthday = datetime.strptime(birthday_str, "%Y-%m-%d").date()
 
@@ -119,17 +121,173 @@ def build_birthday_request_text(user):
     return request_text, leave_date
 
 
-def is_birthday_request_prompt(question):
-    """Check whether user asks to generate birthday leave request."""
-    q = question.lower()
-    triggers = [
-        "generate birthday leave request",
-        "i want birthday leave",
-        "create birthday leave application",
-        "birthday leave request",
-        "birthday leave application",
-    ]
-    return any(trigger in q for trigger in triggers)
+def run_policy_qa_query(question: str):
+    """Run Pure RAG policy Q&A and store result in session state."""
+    if not question.strip():
+        st.warning("Please enter a policy question.")
+        return
+
+    try:
+        if not is_faiss_index_ready():
+            st.info("Building HR knowledge base index. This may take a moment.")
+            with st.spinner("Building HR knowledge base index. This may take a moment."):
+                # Fixed retrieval depth for transparent comparison in UI.
+                st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                    question.strip(),
+                    employee_context=st.session_state.get("policy_qa_employee_context"),
+                    top_k=5,
+                )
+        else:
+            # Fixed retrieval depth for transparent comparison in UI.
+            st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                question.strip(),
+                employee_context=st.session_state.get("policy_qa_employee_context"),
+                top_k=5,
+            )
+    except FileNotFoundError:
+        st.session_state.policy_qa_result = None
+        st.warning(
+            "Knowledge base index is not built yet. Please run scripts/build_faiss_index.py."
+        )
+    except Exception as exc:
+        st.session_state.policy_qa_result = None
+        st.error(
+            "Could not query the knowledge base right now. "
+            "Please check API settings and try again."
+        )
+        st.caption(f"Error: {exc}")
+
+
+def deduplicate_sources(sources):
+    """Deduplicate source list for UI display at document/page level."""
+    unique_sources = []
+    seen = set()
+
+    for source in sources:
+        page_id = (source.get("page_id", "") or "").strip()
+        title = (source.get("title", "") or "").strip()
+
+        # Primary dedup key: page_id.
+        # Fallback key: title + page_id shape requested for UI dedup.
+        key = page_id if page_id else (title, page_id)
+
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_sources.append(source)
+
+    return unique_sources
+
+
+def render_policy_qa_section():
+    """
+    Flow 1: Pure RAG policy Q&A.
+    This section answers policy questions from KB documents only.
+    It does not create requests or make personal eligibility decisions.
+    """
+    st.subheader("Policy Q&A mode")
+    st.caption(
+        "This assistant answers questions based on HR knowledge base documents. "
+        "It does not make personal eligibility decisions."
+    )
+    st.caption(
+        "Your answer may be personalized based on your employee profile, such as department."
+    )
+
+    st.markdown("**Example questions**")
+    example_col1, example_col2, example_col3 = st.columns(3)
+    selected_example_question = None
+
+    if example_col1.button("Birthday leave policy", use_container_width=True):
+        selected_example_question = "What is the birthday leave policy?"
+    if example_col2.button("Probation and birthday leave", use_container_width=True):
+        selected_example_question = "Can employees on probation use birthday leave?"
+    if example_col3.button("Advance request timing", use_container_width=True):
+        selected_example_question = "How many days in advance should birthday leave be requested?"
+
+    if example_col1.button("Annual leave approval timing", use_container_width=True):
+        selected_example_question = "How many days in advance is annual leave request required?"
+    if example_col2.button("Carry-over expiry", use_container_width=True):
+        selected_example_question = "When do carry-over leave days expire?"
+    if example_col3.button("Sales June rule", use_container_width=True):
+        selected_example_question = "What is the Sales department June vacation restriction?"
+
+    if selected_example_question:
+        # Set value before input widget is instantiated in this run.
+        st.session_state.policy_qa_question = selected_example_question
+        run_policy_qa_query(selected_example_question)
+
+    policy_question = st.text_input(
+        "Ask HR Knowledge Base",
+        key="policy_qa_question",
+        placeholder="Example: What are birthday leave rules during probation?",
+    )
+
+    if st.button("Ask Knowledge Base", use_container_width=True):
+        run_policy_qa_query(policy_question)
+
+    result = st.session_state.policy_qa_result
+    if not result:
+        return
+
+    sources = deduplicate_sources(result.get("sources", []))
+
+    with st.container(border=True):
+        st.markdown("**Answer**")
+        st.write(result.get("answer", "No answer returned."))
+
+        source_titles = [item.get("title", "") for item in sources if item.get("title")]
+        unique_titles = list(dict.fromkeys(source_titles))
+        if unique_titles:
+            st.markdown("**Retrieved Document Titles**")
+            st.write(", ".join(unique_titles))
+
+    with st.expander("Sources"):
+        if not sources:
+            st.write("No sources returned.")
+        else:
+            for index, source in enumerate(sources, start=1):
+                title = source.get("title", "-")
+                category = source.get("category", "-")
+                content_type = source.get("content_type", "-")
+
+                source_line = (
+                    f"{index}. {title} | category: {category} | content type: {content_type}"
+                )
+                st.write(source_line)
+
+    with st.expander("Retrieval details / Debug view"):
+        retrieved_chunks = result.get("retrieved_chunks", [])
+        if not retrieved_chunks:
+            st.write("No retrieval chunks available.")
+        else:
+            for chunk in retrieved_chunks:
+                rank = chunk.get("rank", "-")
+                distance = chunk.get("distance", None)
+                metadata = chunk.get("metadata", {})
+                chunk_text = chunk.get("text", "") or ""
+                preview = chunk_text[:320].replace("\n", " ").strip()
+                if not preview:
+                    preview = "(no text preview)"
+
+                st.markdown(f"**Rank #{rank}**")
+                st.write(
+                    f"Distance: {distance:.4f}" if isinstance(distance, (float, int)) else "Distance: -"
+                )
+                st.write(f"Title: {metadata.get('title', '-')}")
+                st.write(f"Category: {metadata.get('category', '-')}")
+                st.write(f"Content Type: {metadata.get('content_type', '-')}")
+                st.write(f"Attachment Name: {metadata.get('attachment_name', '-') or '-'}")
+                st.write(f"Email Date: {metadata.get('email_date', '-') or '-'}")
+                st.write(f"Preview: {preview}")
+
+                with st.expander("Show full retrieved chunk text"):
+                    st.markdown("**Full chunk text**")
+                    st.code(chunk_text if chunk_text else "(empty chunk)")
+                    st.markdown("**Chunk metadata**")
+                    st.json(metadata)
+
+                st.divider()
 
 
 def get_employee_name_map():
@@ -167,7 +325,6 @@ def login_screen():
 
 def employee_portal(user):
     annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
-    birthday_remaining = get_leave_balance_value(user["employee_id"], "birthday_leave", "remaining_days", 0)
 
     st.title("HR AI Assistant Portal")
     st.write(f"Welcome, **{user['full_name']}**.")
@@ -177,107 +334,26 @@ def employee_portal(user):
     metric_col2.metric("Department", user["department"])
     metric_col3.metric("Manager", user["manager_username"] or "-")
 
-    st.subheader("Chat with HR Assistant")
-    st.markdown("**Example questions**")
+    # Flow 1 context payload for personalized retrieval filtering (not decisions).
+    probation_completed = None
+    probation_end = str(user.get("probation_end_date", "")).strip()
+    if probation_end:
+        try:
+            probation_completed = date.today() >= datetime.strptime(probation_end, "%Y-%m-%d").date()
+        except ValueError:
+            probation_completed = None
 
-    example_col1, example_col2, example_col3 = st.columns(3)
-    question = None
+    st.session_state.policy_qa_employee_context = {
+        "full_name": user.get("full_name", ""),
+        "username": user.get("username", ""),
+        "department": user.get("department", ""),
+        "manager_username": user.get("manager_username", ""),
+        "probation_completed": probation_completed,
+        "employment_type": user.get("employment_type", ""),
+    }
+    render_policy_qa_section()
 
-    if example_col1.button("Birthday leave policy", use_container_width=True):
-        question = "Can I take birthday leave?"
-    if example_col2.button("How many vacation days do I have?", use_container_width=True):
-        question = "How many vacation days do I have?"
-    if example_col3.button("Sick leave process", use_container_width=True):
-        question = "What is the sick leave process?"
-
-    if example_col1.button("Remote work policy", use_container_width=True):
-        question = "What is the remote work policy?"
-    if example_col2.button("Generate birthday leave request", use_container_width=True):
-        question = "Generate birthday leave request."
-    if example_col3.button("Create birthday leave application", use_container_width=True):
-        question = "Create birthday leave application."
-
-    chat_question = st.chat_input("Ask your HR question...")
-    if chat_question:
-        question = chat_question
-
-    if question:
-        with st.chat_message("user"):
-            st.write(question)
-
-        with st.chat_message("assistant"):
-            q = question.lower()
-
-            if is_birthday_request_prompt(question):
-                if float(birthday_remaining) <= 0:
-                    st.write("You have already submitted or used birthday leave for this year.")
-                else:
-                    draft_text, _ = build_birthday_request_text(user)
-                    if not draft_text:
-                        st.write("Birthday leave can be requested only within 30 days before your birthday.")
-                    else:
-                        st.write("I generated a formal birthday leave request draft for you below.")
-                        st.session_state.birthday_request_draft = draft_text
-
-            elif "birthday leave" in q:
-                eligible, leave_date = is_birthday_leave_eligible(user["birthday"])
-                if eligible:
-                    st.write(
-                        f"Your birthday leave date for this year is {leave_date.isoformat()}. "
-                        "You can generate and submit your request now."
-                    )
-                else:
-                    st.write("Birthday leave can be requested only within 30 days before your birthday.")
-
-            elif "vacation" in q:
-                st.write(f"You currently have {annual_remaining} annual leave days remaining.")
-
-            elif "sick" in q:
-                st.write("Please notify your manager and submit a medical certificate through the HR portal.")
-
-            elif "remote work" in q or "work from home" in q or "remote" in q:
-                st.write("Remote work is available based on manager approval and team schedule.")
-
-            else:
-                st.write("This request will be processed by the AI assistant in the next version.")
-
-    if st.session_state.birthday_request_draft:
-        st.subheader("Birthday Leave Request")
-        st.session_state.birthday_request_draft = st.text_area(
-            "Request draft",
-            value=st.session_state.birthday_request_draft,
-            height=220,
-        )
-
-        submit_col, clear_col = st.columns(2)
-
-        if submit_col.button("Submit to HR", use_container_width=True):
-            eligible, leave_date = is_birthday_leave_eligible(user["birthday"])
-
-            if not eligible:
-                st.warning("Birthday leave can be requested only within 30 days before your birthday.")
-            elif has_active_birthday_request(user["employee_id"], leave_date.year):
-                st.warning("You have already submitted or used birthday leave for this year.")
-            else:
-                create_request(
-                    employee_profile=user,
-                    request_type="birthday_leave",
-                    request_text=st.session_state.birthday_request_draft,
-                    leave_date=leave_date.isoformat(),
-                    leave_year=str(leave_date.year),
-                )
-                st.session_state.birthday_request_draft = None
-                st.session_state.last_message = "Your birthday leave request has been submitted to HR."
-                st.rerun()
-
-        if clear_col.button("Clear request", use_container_width=True):
-            st.session_state.birthday_request_draft = None
-            st.rerun()
-
-    if st.session_state.last_message:
-        st.success(st.session_state.last_message)
-        st.session_state.last_message = None
-
+    st.divider()
     st.subheader("My HR Requests")
     employee_requests = get_employee_requests(user["employee_id"])
 
@@ -374,8 +450,8 @@ def main_app():
     if st.sidebar.button("Log out"):
         st.session_state.logged_in = False
         st.session_state.current_user = None
-        st.session_state.birthday_request_draft = None
-        st.session_state.last_message = None
+        st.session_state.policy_qa_result = None
+        st.session_state.policy_qa_question = ""
         st.rerun()
 
     if str(user["role"]).lower() == "manager":

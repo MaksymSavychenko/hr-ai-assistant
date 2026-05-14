@@ -1,171 +1,255 @@
-# HR AI Assistant (MVP, CSV-Based)
+# HR AI Assistant (MVP, CSV + RAG)
 
-Streamlit HR assistant prototype with employee and manager workflows.  
-This project simulates a realistic HRIS/RAG-ready architecture using CSV files as temporary database tables.
+Streamlit HR assistant prototype with:
+- CSV-based HRIS data model (MVP)
+- role-based portal (employee / manager)
+- Notion-powered RAG knowledge base
 
-## 1) What This Project Does
+CSV files are temporary table replacements for a future SQL architecture.
 
-- Authenticates users from `data/user_accounts.csv`
-- Loads employee master data from `data/employees.csv`
-- Supports employee and manager roles
-- Generates birthday leave draft requests
-- Applies policy checks:
-  - birthday leave eligibility window (next 30 days)
-  - duplicate birthday leave prevention (same year, non-rejected request already exists)
-- Persists workflow requests in `data/hr_requests.csv`
-- Supports manager approve/reject actions
-- Uses `data/leave_balances.csv` and `data/leave_transactions.csv` as HR leave data model layers
+## 1) Current Product Scope
 
-## 2) Current Tech Stack
+### Employee side
+- Login via `data/user_accounts.csv`
+- Profile + leave metrics
+- **Flow 1: Pure RAG Policy Q&A** in UI
+  - answers from HR knowledge base only
+  - source list + retrieval debug panel
+- My HR requests table (read view)
+
+### Manager side
+- Pending request list filtered by `manager_username`
+- Approve / Reject actions
+- Status updates persisted in `data/hr_requests.csv`
+
+## 2) Tech Stack
 
 - Python 3.11
 - Streamlit
 - Pandas
-- CSV storage (MVP replacement for future SQL tables)
+- Notion API (`notion-client`)
+- LangChain + ChatOpenAI
+- OpenAI embeddings
+- FAISS
+- CSV storage (MVP replacement for SQL)
 
 ## 3) Project Structure
 
 ```text
 hr-ai-assistant/
 ├── app.py
-├── src/
-│   ├── auth.py
-│   └── requests.py
-└── data/
-    ├── employees.csv
-    ├── user_accounts.csv
-    ├── leave_balances.csv
-    ├── leave_transactions.csv
-    └── hr_requests.csv
+├── data/
+│   ├── employees.csv
+│   ├── user_accounts.csv
+│   ├── leave_balances.csv
+│   ├── leave_transactions.csv
+│   └── hr_requests.csv
+├── scripts/
+│   ├── build_faiss_index.py
+│   ├── test_notion_loader.py
+│   ├── test_faiss_retriever.py
+│   ├── test_rag_answer.py
+│   └── test_dynamic_policy_rules.py
+└── src/
+    ├── auth.py
+    ├── requests.py
+    ├── config/
+    │   └── secrets.py
+    ├── rag/
+    │   ├── notion_loader.py
+    │   ├── chunking.py
+    │   ├── faiss_store.py
+    │   ├── prompts.py
+    │   ├── rag_pipeline.py
+    │   └── policy_rule_extractor.py
+    └── rules/
+        └── dynamic_evaluator.py
 ```
 
-## 4) Data Tables
+## 4) Data Model
 
-### `employees.csv` (Master Employee Directory)
+### `employees.csv`
+Master employee table:
+- identity, org, manager routing
+- probation end, birthday, employment details
 
-Contains identity and organizational attributes:
-- `employee_id` (primary business key)
-- `username`, `full_name`, `department`, `role`
-- reporting line: `manager_username`
-- employment dates and status (`hire_date`, `probation_end_date`, `active_status`)
-- profile fields (`birthday`, `employment_type`, `employment_percentage`, `office_location`, `email`)
-
-### `user_accounts.csv` (MVP Authentication Table)
-
-Simple login dataset:
+### `user_accounts.csv`
+MVP auth table:
 - `user_id`, `employee_id`, `username`, `password`, `account_status`
 
-Notes:
-- all current test users are `active`
-- MVP plain password is used intentionally (no hashing/JWT/OAuth/MFA)
+### `leave_balances.csv`
+Yearly leave snapshot:
+- annual, birthday, sick, unpaid leave balances
+- carry-over and expiry fields
 
-### `leave_balances.csv` (Current Balance Snapshot)
+### `leave_transactions.csv`
+Leave ledger:
+- accrual / used / carry-over / expiry / adjustment movements
+- `related_request_id` links to workflow where applicable
 
-Per employee / year / leave type:
-- `leave_type`: `annual_leave`, `birthday_leave`, `sick_leave`, `unpaid_leave`
-- entitlement, used, remaining
-- carry-over values and expiry date
+### `hr_requests.csv`
+Workflow table:
+- request payload + dates + approval status + policy results
 
-### `leave_transactions.csv` (Historical Leave Ledger)
+## 5) RAG Pipeline Status
 
-Stores leave movements:
-- `transaction_type`: `accrual`, `used`, `carry_over`, `expiry`, `adjustment`
-- optional `related_request_id` links request-based usage to `hr_requests.csv`
+Implemented:
+- Notion ingestion with `Status = Active` filter
+- mixed document support:
+  - Notion page text
+  - PDF attachments
+  - EML attachments
+- attachment download to `data/tmp/notion_downloads/`
+- text extraction:
+  - PDF: full pages
+  - EML: headers + body
+- chunking
+- OpenAI embeddings
+- FAISS build + load + retrieval
+- grounded LLM answer synthesis
 
-### `hr_requests.csv` (Workflow Table)
+Return structure from `ask_hr_knowledge_base(...)`:
+- `answer`
+- `sources`
+- `retrieved_chunks`
 
-Employee request lifecycle:
-- request details, requested leave dates, manager routing
-- status, approval metadata, policy check result
-- rejection reason and source channel
+### EML Parsing Update
 
-## 5) Table Relationships
+EML parser now extracts standard headers:
+- `Subject`
+- `From`
+- `To`
+- `Date`
+- `Message-ID`
 
-- `employees.employee_id` is the central employee key
-- `user_accounts.employee_id` -> `employees.employee_id`
-- `leave_balances.employee_id` -> `employees.employee_id`
-- `leave_transactions.employee_id` -> `employees.employee_id`
-- `hr_requests.employee_id` -> `employees.employee_id`
-- `employees.manager_username` is used for manager routing
-- `leave_transactions.related_request_id` references `hr_requests.request_id` where applicable
+Stored metadata fields:
+- `email_subject`
+- `email_from`
+- `email_to`
+- `email_date`
+- `email_message_id`
 
-## 6) Policy Logic Implemented in App
+For embedding text, EML content is normalized as:
 
-### Birthday Leave Date Rule
-- Birth year is ignored for leave date calculation
-- Leave date is built from employee birthday month/day + current year
+```text
+EMAIL SUBJECT: ...
+EMAIL FROM: ...
+EMAIL TO: ...
+EMAIL DATE: ...
+EMAIL MESSAGE-ID: ...
 
-### Birthday Leave 30-Day Eligibility
-- Request generation allowed only if birthday date is between:
-  - today
-  - today + 30 days
+<clean email body>
+```
 
-### Duplicate Birthday Leave Prevention
-- New birthday leave request is blocked if employee already has non-rejected birthday leave request in same year
+## 6) Streamlit RAG UI (Flow 1)
 
-## 7) Role Workflows
+Employee portal includes a single policy assistant flow:
+- **Policy Q&A mode**
+- helper text clarifies it does not make personal eligibility decisions
+- question input + example question buttons
+- all answers come from `ask_hr_knowledge_base(question, top_k=5)`
 
-### Employee Portal
-- profile view
-- leave metrics (from balances)
-- chat-like mock assistant responses
-- birthday leave draft generation
-- submit request to HR workflow
-- request history table
+Display order:
+1. Answer
+2. Sources (deduplicated per page/document in UI)
+3. Retrieval details / Debug view
 
-### Manager Portal
-- pending request list filtered by `manager_username`
-- approve / reject actions
-- status updates written to `hr_requests.csv`
+### Debug Panel
 
-## 8) Demo Data Scenarios Included
+`Retrieval details / Debug view` shows raw retrieval ranking (no chunk dedup):
+- rank
+- distance
+- title, category, content type
+- attachment name
+- email date
+- preview text
+- nested expander with full chunk text + metadata
 
-The dataset includes policy test scenarios such as:
-- birthday leave approved (eligible case)
-- birthday leave rejected (probation, no entitlement, invalid timing window)
-- annual leave approved (submitted in advance)
-- annual leave warning/late submission
-- annual leave rejected (insufficient balance)
-- Sales June special handling (standard vs HoD approval logic in data)
-- carry-over usage before expiry and expiry after March 31
+## 7) Streamlit Cloud Readiness
 
-## 9) Run the App
+### Secrets resolution
 
-From project root:
+`src/config/secrets.py` resolves secrets from:
+1. local `.env`
+2. `st.secrets` (Streamlit Cloud)
+
+Required keys:
+- `OPENAI_API_KEY`
+- `NOTION_TOKEN`
+- `NOTION_DATABASE_ID`
+
+### FAISS bootstrap behavior in cloud
+
+When first query is executed:
+- if `vector_store/faiss_index` exists -> load it
+- if missing -> auto-build index from Notion, save to `vector_store/faiss_index`, continue query
+
+During auto-build, UI shows:
+- `Building HR knowledge base index. This may take a moment.`
+
+## 8) Run Locally
 
 ```bash
 .venv/bin/streamlit run app.py --server.port 8502
 ```
 
-If `8502` is busy, use another port.
+If the port is busy, use another one.
 
-## 10) Test Login Credentials (MVP)
+## 9) RAG Test Commands
 
-Use the following usernames from `data/user_accounts.csv` with:
+```bash
+.venv/bin/python scripts/test_notion_loader.py
+.venv/bin/python scripts/build_faiss_index.py
+.venv/bin/python scripts/test_faiss_retriever.py
+.venv/bin/python scripts/test_rag_answer.py
+.venv/bin/python scripts/test_dynamic_policy_rules.py
+```
 
-- password: `test123`
+## 10) Streamlit Cloud Secrets Example
 
-| Username | Role |
-| --- | --- |
-| `laura.chen` | Employee |
-| `omar.khan` | Employee |
-| `nina.petrov` | Employee |
-| `victor.lee` | Employee |
-| `elena.rossi` | Employee |
-| `grace.nowak` | Employee |
-| `dmitri.sokolov` | Manager |
-| `iryna.koval` | Manager |
-| `serhii.bondar` | Manager |
-| `oliver.grant` | Manager |
-| `kateryna.melnyk` | Manager |
+In Streamlit Cloud app settings, add:
 
-## 11) Known MVP Limits
+```toml
+OPENAI_API_KEY = "..."
+NOTION_TOKEN = "..."
+NOTION_DATABASE_ID = "..."
+```
 
-- CSV is not concurrent-safe like a real database
-- no hashing or enterprise auth
-- policy checks are intentionally scoped to core course requirements
-- no OpenAI/RAG integration yet (prepared for later phase)
+## 11) Test Login Credentials (MVP)
 
-## 12) Planned Next Step
+Use usernames from `data/user_accounts.csv` with password:
+- `test123`
 
-Replace CSV data-access modules with SQL repositories while keeping Streamlit UI and workflow logic stable.
+Managers:
+- `dmitri.sokolov`
+- `iryna.koval`
+- `serhii.bondar`
+- `oliver.grant`
+- `kateryna.melnyk`
+
+Employees:
+- `laura.chen`
+- `omar.khan`
+- `nina.petrov`
+- `victor.lee`
+- `elena.rossi`
+- `grace.nowak`
+
+## 12) Security / Git Ignore
+
+Do not commit:
+- `.env`
+- `vector_store/`
+- `data/tmp/`
+
+## 13) MVP Limits
+
+- CSV is not concurrent-safe (unlike real DB)
+- auth is intentionally simple for MVP
+- policy decisioning in UI is not using dynamic evaluator yet
+- RAG may return only what is present in indexed knowledge base
+
+## 14) Next Planned Step
+
+Connect policy-rule extraction + deterministic evaluator into app flow (Flow 2),
+so LLM extracts structured rules and Python makes final eligibility decisions.
