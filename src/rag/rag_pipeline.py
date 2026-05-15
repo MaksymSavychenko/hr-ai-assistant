@@ -12,6 +12,7 @@ from src.rag.prompts import get_hr_rag_prompt
 
 
 INDEX_DIR = "vector_store/faiss_index"
+SALES_DEPARTMENT_NAME = "sales"
 
 
 def _format_context_with_sources(retrieved_chunks: List[Dict]) -> str:
@@ -76,6 +77,74 @@ def _build_unique_sources(retrieved_chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
+def _get_employee_department(employee_context: dict | None) -> str:
+    if not employee_context:
+        return ""
+    return str(employee_context.get("department", "")).strip().lower()
+
+
+def _is_sales_specific_chunk(chunk: Dict) -> bool:
+    """
+    Lightweight heuristic for Sales-only communication/policy snippets.
+    """
+    metadata = chunk.get("metadata", {})
+    text = str(chunk.get("text", "") or "").lower()
+    title = str(metadata.get("title", "") or "").lower()
+    category = str(metadata.get("category", "") or "").lower()
+    content_type = str(metadata.get("content_type", "") or "").lower()
+    attachment_name = str(metadata.get("attachment_name", "") or "").lower()
+
+    combined = " ".join([text, title, category, content_type, attachment_name])
+    sales_specific_markers = [
+        "sales team",
+        "sales department",
+        "sales teams",
+        "for sales",
+        "sales vacation",
+        "june sales",
+    ]
+    return any(marker in combined for marker in sales_specific_markers)
+
+
+def _is_general_policy_or_faq_chunk(chunk: Dict) -> bool:
+    metadata = chunk.get("metadata", {})
+    title = str(metadata.get("title", "") or "").lower()
+    category = str(metadata.get("category", "") or "").lower()
+    content_type = str(metadata.get("content_type", "") or "").lower()
+    attachment_name = str(metadata.get("attachment_name", "") or "").lower()
+
+    combined = " ".join([title, category, content_type, attachment_name])
+    return (
+        "faq" in combined
+        or "policy" in combined
+        or "handbook" in combined
+        or "notion" in combined
+        or "pdf" in combined
+    )
+
+
+def filter_retrieved_chunks_by_employee_context(chunks: List[Dict], employee_context: dict | None) -> List[Dict]:
+    """
+    Department-aware filtering for Flow 1:
+    - Sales-specific chunks are shown only to Sales employees.
+    - General policy/FAQ chunks remain available for everyone.
+    """
+    department = _get_employee_department(employee_context)
+    if not department:
+        return chunks
+
+    if department == SALES_DEPARTMENT_NAME:
+        return chunks
+
+    filtered = [chunk for chunk in chunks if not _is_sales_specific_chunk(chunk)]
+    if filtered:
+        return filtered
+
+    # Fallback: keep only general chunks if all retrieved were filtered out.
+    general_fallback = [chunk for chunk in chunks if _is_general_policy_or_faq_chunk(chunk)]
+    return general_fallback
+
+
 def is_faiss_index_ready(index_dir: str = INDEX_DIR) -> bool:
     """Check if FAISS index files exist."""
     base_path = Path(index_dir)
@@ -101,7 +170,12 @@ def ensure_faiss_index_ready(index_dir: str = INDEX_DIR) -> bool:
     return True
 
 
-def ask_hr_knowledge_base(question: str, top_k: int = 6, model_name: str = "gpt-4o-mini") -> Dict:
+def ask_hr_knowledge_base(
+    question: str,
+    employee_context: dict | None = None,
+    top_k: int = 5,
+    model_name: str = "gpt-4o-mini",
+) -> Dict:
     """
     End-to-end RAG answering:
     1) load FAISS store
@@ -120,6 +194,7 @@ def ask_hr_knowledge_base(question: str, top_k: int = 6, model_name: str = "gpt-
     retriever = FaissStoreBuilder()
     index, records = retriever.load_index(INDEX_DIR)
     retrieved_chunks = retriever.search(question, index, records, top_k=top_k)
+    retrieved_chunks = filter_retrieved_chunks_by_employee_context(retrieved_chunks, employee_context)
 
     if not retrieved_chunks:
         return {
