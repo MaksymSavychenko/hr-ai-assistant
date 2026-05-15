@@ -471,43 +471,41 @@ def render_policy_qa_section(user: dict):
     This section answers policy questions from KB documents only.
     It does not create requests or make personal eligibility decisions.
     """
-    st.subheader("Policy Q&A mode")
-    st.caption(
-        "This assistant answers questions based on HR knowledge base documents. "
-        "It does not make personal eligibility decisions."
-    )
+    st.subheader("HR Assistant")
 
     st.markdown("**Example questions**")
     example_col1, example_col2, example_col3 = st.columns(3)
     selected_example_question = None
 
-    if example_col1.button("Birthday leave policy", use_container_width=True):
+    if example_col1.button("Birthday policy", use_container_width=True):
         selected_example_question = "What is the birthday leave policy?"
-    if example_col2.button("Probation and birthday leave", use_container_width=True):
-        selected_example_question = "Can employees on probation use birthday leave?"
-    if example_col3.button("Advance request timing", use_container_width=True):
-        selected_example_question = "How many days in advance should birthday leave be requested?"
+    if example_col2.button("Mixed policy + decision", use_container_width=True):
+        selected_example_question = "What is the birthday leave policy? Can I take this leave on June 30?"
+    if example_col3.button("Birthday + annual leave", use_container_width=True):
+        selected_example_question = "I want to take birthday vacation on June 20 and 7 additional days starting from June 21"
 
-    if example_col1.button("Annual leave approval timing", use_container_width=True):
-        selected_example_question = "How many days in advance is annual leave request required?"
-    if example_col2.button("Carry-over expiry", use_container_width=True):
-        selected_example_question = "When do carry-over leave days expire?"
-    if example_col3.button("Sales June rule", use_container_width=True):
-        selected_example_question = "What is the Sales department June vacation restriction?"
+    if example_col1.button("Annual leave balance", use_container_width=True):
+        selected_example_question = "Can I take 12 annual leave days on May 30?"
+    if example_col2.button("Sales June restriction", use_container_width=True):
+        selected_example_question = "I want 8 vacation days in June"
+    if example_col3.button("LLM fallback routing", use_container_width=True):
+        selected_example_question = "Can employees on probation use birthday leave?"
 
     if selected_example_question:
         # Set value before input widget is instantiated in this run.
         st.session_state.policy_qa_question = selected_example_question
-        run_policy_qa_query(selected_example_question, user)
 
-    policy_question = st.text_input(
-        "Ask HR Knowledge Base",
-        key="policy_qa_question",
-        placeholder="Example: What are birthday leave rules during probation?",
-    )
-
-    if st.button("Ask Knowledge Base", use_container_width=True):
-        run_policy_qa_query(policy_question, user)
+    input_col, ask_col = st.columns([16, 2], gap="small", vertical_alignment="bottom")
+    with input_col:
+        policy_question = st.text_input(
+            "Ask HR Knowledge Base",
+            key="policy_qa_question",
+            label_visibility="collapsed",
+            placeholder="Ask HR Knowledge Base (example: What are birthday leave rules during probation?)",
+        )
+    with ask_col:
+        if st.button("Ask", use_container_width=True):
+            run_policy_qa_query(policy_question, user)
 
     result = st.session_state.policy_qa_result
     if not result:
@@ -764,7 +762,6 @@ def employee_portal(user):
     annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
 
     st.title("HR AI Assistant Portal")
-    st.caption("DSS Layer Prototype")
     st.write(f"Welcome, **{user['full_name']}**.")
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
