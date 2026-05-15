@@ -1,37 +1,41 @@
-# HR AI Assistant (MVP, CSV + RAG)
+# HR AI Assistant (MVP, CSV + RAG + DSS)
 
-Streamlit HR assistant prototype with:
-- CSV-based HRIS data model (MVP)
-- role-based portal (employee / manager)
+Streamlit HR assistant course project with:
+- CSV-based HRIS-style data model (temporary replacement for SQL tables)
+- role-based employee/manager portal
 - Notion-powered RAG knowledge base
+- experimental DSS layer (hybrid RAG + deterministic policy evaluation)
 
-CSV files are temporary table replacements for a future SQL architecture.
+## 1) Current Scope
 
-## 1) Current Product Scope
+### Employee portal
+- Login using `data/user_accounts.csv`
+- Profile + annual leave metric
+- One chat entry point: **Ask HR Knowledge Base**
+  - **Flow 1 (Policy Q&A)** for general HR policy questions
+  - **Flow 2 (Decision Support)** for personal leave decision requests
+- "My HR Requests" table (read view from `data/hr_requests.csv`)
 
-### Employee side
-- Login via `data/user_accounts.csv`
-- Profile + leave metrics
-- **Flow 1: Pure RAG Policy Q&A** in UI
-  - answers from HR knowledge base only
-  - source list + retrieval debug panel
-- My HR requests table (read view)
-
-### Manager side
-- Pending request list filtered by `manager_username`
+### Manager portal
+- Pending requests filtered by `manager_username`
 - Approve / Reject actions
-- Status updates persisted in `data/hr_requests.csv`
+- Status updates persisted to `data/hr_requests.csv`
 
-## 2) Tech Stack
+## 2) Architecture (Current)
 
-- Python 3.11
-- Streamlit
-- Pandas
-- Notion API (`notion-client`)
-- LangChain + ChatOpenAI
-- OpenAI embeddings
-- FAISS
-- CSV storage (MVP replacement for SQL)
+```text
+User message in Streamlit
+        ↓
+Intent Router (rule-based first, LLM fallback only when uncertain)
+        ↓
+ ┌───────────────────────────────┬──────────────────────────────────┐
+ │ policy_qa                     │ birthday_leave_decision /        │
+ │                               │ annual_leave_decision            │
+ │ Flow 1                        │ Flow 2 (experimental DSS)        │
+ │ RAG answer from KB            │ deterministic evaluation +       │
+ │ (no personal final decision)  │ policy summary from KB           │
+ └───────────────────────────────┴──────────────────────────────────┘
+```
 
 ## 3) Project Structure
 
@@ -46,10 +50,15 @@ hr-ai-assistant/
 │   └── hr_requests.csv
 ├── scripts/
 │   ├── build_faiss_index.py
+│   ├── debug_notion_access.py
 │   ├── test_notion_loader.py
 │   ├── test_faiss_retriever.py
 │   ├── test_rag_answer.py
-│   └── test_dynamic_policy_rules.py
+│   ├── test_dynamic_policy_rules.py
+│   ├── test_birthday_leave_service.py
+│   ├── test_annual_leave_service.py
+│   ├── test_chat_decision_routing.py
+│   └── test_intent_router.py
 └── src/
     ├── auth.py
     ├── requests.py
@@ -63,193 +72,236 @@ hr-ai-assistant/
     │   ├── rag_pipeline.py
     │   └── policy_rule_extractor.py
     └── rules/
-        └── dynamic_evaluator.py
+        ├── intent_router.py
+        ├── leave_request_parser.py
+        ├── dynamic_evaluator.py
+        ├── birthday_leave_service.py
+        └── annual_leave_service.py
 ```
 
 ## 4) Data Model
 
 ### `employees.csv`
-Master employee table:
-- identity, org, manager routing
-- probation end, birthday, employment details
+Master employee table with org/role fields:
+- `employee_id`, `username`, `full_name`, `department`, `role`, `manager_username`
+- `hire_date`, `probation_end_date`, `birthday`
+- employment metadata (type, percentage, location, status, email)
 
 ### `user_accounts.csv`
-MVP auth table:
+MVP authentication table:
 - `user_id`, `employee_id`, `username`, `password`, `account_status`
+- `employee_id` links to `employees.csv`
 
 ### `leave_balances.csv`
-Yearly leave snapshot:
-- annual, birthday, sick, unpaid leave balances
+Yearly leave snapshot per employee:
+- entitlement / used / remaining
 - carry-over and expiry fields
 
 ### `leave_transactions.csv`
-Leave ledger:
-- accrual / used / carry-over / expiry / adjustment movements
-- `related_request_id` links to workflow where applicable
+Historical leave ledger:
+- accrual, used, carry-over, expiry, adjustment
+- optional request linkage
 
 ### `hr_requests.csv`
-Workflow table:
-- request payload + dates + approval status + policy results
+Leave request workflow table:
+- request payload + dates + statuses + approval fields
+- used by employee history and manager approval UI
 
-## 5) RAG Pipeline Status
+## 5) RAG Module Status
 
-Implemented:
-- Notion ingestion with `Status = Active` filter
-- mixed document support:
+Implemented components:
+- Notion integration for HR Knowledge Base
+- Loading only **Active** records
+- Mixed content ingestion:
   - Notion page text
   - PDF attachments
   - EML attachments
-- attachment download to `data/tmp/notion_downloads/`
-- text extraction:
-  - PDF: full pages
-  - EML: headers + body
-- chunking
+- Attachment download to `data/tmp/notion_downloads/`
+- Extraction:
+  - PDF full-page text
+  - EML headers + body
+- Document normalization
+- Chunking (`~900` chars, overlap `~180`)
 - OpenAI embeddings
-- FAISS build + load + retrieval
-- grounded LLM answer synthesis
+- FAISS index build/load
+- Retrieval + grounded LLM synthesis
 
-Return structure from `ask_hr_knowledge_base(...)`:
-- `answer`
-- `sources`
-- `retrieved_chunks`
-
-### EML Parsing Update
-
-EML parser now extracts standard headers:
-- `Subject`
-- `From`
-- `To`
-- `Date`
-- `Message-ID`
-
-Stored metadata fields:
-- `email_subject`
-- `email_from`
-- `email_to`
-- `email_date`
-- `email_message_id`
-
-For embedding text, EML content is normalized as:
+Current RAG flow:
 
 ```text
-EMAIL SUBJECT: ...
-EMAIL FROM: ...
-EMAIL TO: ...
-EMAIL DATE: ...
-EMAIL MESSAGE-ID: ...
-
-<clean email body>
+Notion HR Knowledge Base
+        ↓
+Notion Loader
+        ↓
+PDF / EML / Notion Text Extraction
+        ↓
+Document Normalization
+        ↓
+Chunking
+        ↓
+OpenAI Embeddings
+        ↓
+FAISS Vector Store
+        ↓
+RAG Answer Generation
 ```
 
-## 6) Streamlit RAG UI (Flow 1)
+### EML Metadata
 
-Employee portal includes a single policy assistant flow:
-- **Policy Q&A mode**
-- helper text clarifies it does not make personal eligibility decisions
-- question input + example question buttons
-- all answers come from `ask_hr_knowledge_base(question, top_k=5)`
+For EML docs, parser extracts:
+- `Subject`, `From`, `To`, `Date`, `Message-ID`
 
-Display order:
-1. Answer
-2. Sources (deduplicated per page/document in UI)
-3. Retrieval details / Debug view
+Stored fields:
+- `email_subject`, `email_from`, `email_to`, `email_date`, `email_message_id`
 
-### Debug Panel
+## 6) Flow 1: Pure RAG Policy Q&A
 
-`Retrieval details / Debug view` shows raw retrieval ranking (no chunk dedup):
-- rank
-- distance
-- title, category, content type
-- attachment name
-- email date
-- preview text
-- nested expander with full chunk text + metadata
+`ask_hr_knowledge_base(question, employee_context=None, top_k=5)`:
+1. Ensures FAISS index exists (builds automatically if missing)
+2. Retrieves top chunks
+3. Applies department-aware chunk filtering (Sales-specific chunks hidden for non-Sales users)
+4. Builds grounded prompt from filtered chunks
+5. Returns:
+   - `answer`
+   - `sources`
+   - `retrieved_chunks`
 
-## 7) Streamlit Cloud Readiness
+Important:
+- Flow 1 is for policy explanation, not final personal eligibility decisions.
 
-### Secrets resolution
+## 7) Flow 2: Experimental Decision Support
 
-`src/config/secrets.py` resolves secrets from:
-1. local `.env`
-2. `st.secrets` (Streamlit Cloud)
+Flow 2 is triggered from chat by intent routing and currently supports:
+- `birthday_leave_decision`
+- `annual_leave_decision`
 
-Required keys:
-- `OPENAI_API_KEY`
-- `NOTION_TOKEN`
-- `NOTION_DATABASE_ID`
+### Birthday Leave DSS (`birthday_leave_service.py`)
+- Retrieves birthday policy context from FAISS
+- Extracts/derives policy constraints
+- Applies deterministic checks using employee data + request history:
+  - probation completion
+  - birthday window (`±30` calendar days around birthday in requested year)
+  - request timing (3 working days)
+  - once per calendar year
+  - balance/day-limit checks
+- Handles mixed requests (birthday + additional annual leave)
+- Applies Sales June stacking rule for additional annual leave in June
 
-### FAISS bootstrap behavior in cloud
+### Annual Leave DSS (`annual_leave_service.py`)
+- Compares requested days vs `annual_leave_remaining`
+- Applies manager approval requirement
+- Applies Sales June additional approval rule for requests over 5 days in June
 
-When first query is executed:
-- if `vector_store/faiss_index` exists -> load it
-- if missing -> auto-build index from Notion, save to `vector_store/faiss_index`, continue query
+## 8) Intent Routing (Hybrid)
 
-During auto-build, UI shows:
-- `Building HR knowledge base index. This may take a moment.`
+`intent_router.py` routing strategy:
+1. Rule-based detection with confidence
+2. LLM fallback only when rule confidence is low
 
-## 8) Run Locally
+Supported intents:
+- `policy_qa`
+- `birthday_leave_decision`
+- `annual_leave_decision`
+- `unknown`
+
+Returned routing metadata:
+- `intent`
+- `router_used` (`rule_based` or `llm_fallback`)
+- `confidence`
+- `reason`
+- `mixed_intent_detected`
+
+Mixed-intent handling:
+- Example: "What is the birthday leave policy? Can I take this leave on June 30?"
+- Routed to Flow 2 (`birthday_leave_decision`) so UI can show:
+  - policy summary
+  - personal deterministic decision
+
+## 9) Streamlit UX Notes
+
+- App banner marks this as **Experimental DSS Version**
+- DSS response shows concise decision by default
+- Detailed checks are under collapsed expanders:
+  - `Evaluation details`
+  - `Sources`
+  - `Routing details`
+  - `Technical debug details`
+- For mixed intent, UI shows **Policy summary** above DSS decision card
+
+## 10) Setup
+
+Install dependencies:
 
 ```bash
-.venv/bin/streamlit run app.py --server.port 8502
+.venv/bin/pip install -r requirements.txt
 ```
 
-If the port is busy, use another one.
+Create `.env` (local dev):
 
-## 9) RAG Test Commands
+```env
+OPENAI_API_KEY=...
+NOTION_TOKEN=...
+NOTION_DATABASE_ID=...
+```
+
+Run app:
+
+```bash
+.venv/bin/streamlit run app.py --server.port 8501
+```
+
+## 11) Key Commands
+
+RAG / ingestion:
 
 ```bash
 .venv/bin/python scripts/test_notion_loader.py
 .venv/bin/python scripts/build_faiss_index.py
 .venv/bin/python scripts/test_faiss_retriever.py
 .venv/bin/python scripts/test_rag_answer.py
+```
+
+Routing / DSS:
+
+```bash
+.venv/bin/python scripts/test_intent_router.py
+.venv/bin/python scripts/test_chat_decision_routing.py
+.venv/bin/python scripts/test_birthday_leave_service.py
+.venv/bin/python scripts/test_annual_leave_service.py
 .venv/bin/python scripts/test_dynamic_policy_rules.py
 ```
 
-## 10) Streamlit Cloud Secrets Example
+## 12) Streamlit Cloud Notes
 
-In Streamlit Cloud app settings, add:
+Secrets are resolved from:
+1. local `.env`
+2. `st.secrets` (Cloud)
 
-```toml
-OPENAI_API_KEY = "..."
-NOTION_TOKEN = "..."
-NOTION_DATABASE_ID = "..."
-```
+Required secrets:
+- `OPENAI_API_KEY`
+- `NOTION_TOKEN`
+- `NOTION_DATABASE_ID`
 
-## 11) Test Login Credentials (MVP)
+If `vector_store/faiss_index` is missing at runtime, app auto-builds index from Notion and continues.
 
-Use usernames from `data/user_accounts.csv` with password:
-- `test123`
+## 13) Test Users (MVP Auth)
 
-Managers:
-- `dmitri.sokolov`
-- `iryna.koval`
-- `serhii.bondar`
-- `oliver.grant`
-- `kateryna.melnyk`
+- Password for all accounts in `data/user_accounts.csv`: `test123`
+- Account status: `active`
 
-Employees:
-- `laura.chen`
-- `omar.khan`
-- `nina.petrov`
-- `victor.lee`
-- `elena.rossi`
-- `grace.nowak`
+Use any username from `data/user_accounts.csv` (employees and managers).
 
-## 12) Security / Git Ignore
+## 14) Security / Git Ignore
 
 Do not commit:
 - `.env`
 - `vector_store/`
 - `data/tmp/`
 
-## 13) MVP Limits
+## 15) Current Limitations
 
-- CSV is not concurrent-safe (unlike real DB)
-- auth is intentionally simple for MVP
-- policy decisioning in UI is not using dynamic evaluator yet
-- RAG may return only what is present in indexed knowledge base
+- CSV storage is not concurrent-safe (MVP only)
+- Auth is intentionally simple (no hashing/OAuth/MFA)
+- Flow 2 is experimental and scoped to selected leave scenarios
+- RAG quality depends on indexed Notion content quality and coverage
 
-## 14) Next Planned Step
-
-Connect policy-rule extraction + deterministic evaluator into app flow (Flow 2),
-so LLM extracts structured rules and Python makes final eligibility decisions.
