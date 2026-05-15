@@ -27,6 +27,36 @@ def main():
     print(f"Detected route: {route_a}")
     print(f"Route meta: {route_a_meta}")
 
+    # A1. Generic employee-group question should be policy_qa
+    msg_a1 = "Can employees on probation use birthday leave?"
+    route_a1 = detect_chat_intent(msg_a1)
+    route_a1_meta = detect_chat_intent_with_meta(msg_a1)
+    print_case("CASE A1: Generic employee-group policy question")
+    print(f"Message: {msg_a1}")
+    print(f"Detected route: {route_a1}")
+    print(f"Route meta: {route_a1_meta}")
+    print("- expected route: policy_qa")
+
+    # A1b. Generic employee-group eligibility wording should be policy_qa
+    msg_a1b = "Are employees eligible for Birthday Leave during probation?"
+    route_a1b = detect_chat_intent(msg_a1b)
+    route_a1b_meta = detect_chat_intent_with_meta(msg_a1b)
+    print_case("CASE A1b: Generic employee-group eligibility wording")
+    print(f"Message: {msg_a1b}")
+    print(f"Detected route: {route_a1b}")
+    print(f"Route meta: {route_a1b_meta}")
+    print("- expected route: policy_qa")
+
+    # A1c. Personal birthday leave request should be birthday_leave_decision
+    msg_a1c = "Can I take Birthday Leave on June 30?"
+    route_a1c = detect_chat_intent(msg_a1c)
+    route_a1c_meta = detect_chat_intent_with_meta(msg_a1c)
+    print_case("CASE A1c: Personal birthday leave request")
+    print(f"Message: {msg_a1c}")
+    print(f"Detected route: {route_a1c}")
+    print(f"Route meta: {route_a1c_meta}")
+    print("- expected route: birthday_leave_decision")
+
     # A2. Mixed intent question should prefer DSS
     msg_a2 = "What is the birthday leave policy? Can I take this leave on June 30?"
     route_a2 = detect_chat_intent(msg_a2)
