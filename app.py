@@ -11,8 +11,9 @@ from src.requests import (
     get_manager_pending_requests,
     update_request_status,
 )
+from src.rules.annual_leave_service import check_annual_leave_eligibility
 from src.rules.birthday_leave_service import check_birthday_leave_eligibility
-from src.rules.intent_router import detect_chat_intent
+from src.rules.intent_router import detect_chat_intent, detect_chat_intent_with_meta
 from src.rules.leave_request_parser import parse_leave_request_message
 
 
@@ -195,35 +196,76 @@ def _format_flow2_chat_answer(parsed_request: dict, decision_result: dict) -> st
     return "\n".join(lines).strip()
 
 
+def _format_annual_flow2_chat_answer(parsed_request: dict, decision_result: dict) -> str:
+    requested_days = int(decision_result.get("requested_days", parsed_request.get("requested_days") or 1))
+    annual_leave_remaining = int(decision_result.get("annual_leave_remaining", 0))
+    annual_balance_sufficient = bool(decision_result.get("annual_leave_balance_sufficient", False))
+    manager_required = bool(decision_result.get("manager_approval_required", True))
+    decision_title = decision_result.get("decision_title", "Decision support result")
+    manager_line = "Manager approval is required." if manager_required else "Manager approval is not required."
+
+    lines = [
+        decision_title,
+        decision_result.get("policy_summary", ""),
+        decision_result.get("explanation", ""),
+        "",
+        f"Requested annual leave days: {requested_days}",
+        f"Annual leave remaining: {annual_leave_remaining}",
+        f"Balance sufficient: {'Yes' if annual_balance_sufficient else 'No'}",
+        manager_line,
+    ]
+    return "\n".join(lines).strip()
+
+
 def run_policy_qa_query(question: str, user: dict):
     """
     Route user message:
     - policy_qa -> Flow 1 RAG
     - birthday_leave_decision -> Flow 2 experimental deterministic decision support
+    - annual_leave_decision -> Flow 2 annual leave deterministic decision support
     """
     if not question.strip():
         st.warning("Please enter a policy question.")
         return
 
     try:
-        intent = detect_chat_intent(question)
+        intent_meta = detect_chat_intent_with_meta(question)
+        intent = intent_meta.get("intent", "policy_qa")
+        routing_meta = {
+            "detected_intent": intent,
+            "router_used": intent_meta.get("router_used", ""),
+            "confidence": intent_meta.get("confidence", 0.0),
+            "routing_reason": intent_meta.get("reason", ""),
+            "mixed_intent_detected": bool(intent_meta.get("mixed_intent_detected", False)),
+            "detected_intent_meta": intent_meta,
+        }
         if intent == "policy_qa":
             employee_context = _build_flow1_employee_context(user)
             if not is_faiss_index_ready():
                 st.info("Building HR knowledge base index. This may take a moment.")
                 with st.spinner("Building HR knowledge base index. This may take a moment."):
-                    st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                    result = ask_hr_knowledge_base(
                         question.strip(),
                         employee_context=employee_context,
                         top_k=5,
                     )
+                    st.session_state.policy_qa_result = {
+                        **result,
+                        **routing_meta,
+                        "flow_used": "Flow 1: Policy Q&A (RAG)",
+                    }
             else:
-                st.session_state.policy_qa_result = ask_hr_knowledge_base(
+                result = ask_hr_knowledge_base(
                     question.strip(),
                     employee_context=employee_context,
                     top_k=5,
                 )
-        else:
+                st.session_state.policy_qa_result = {
+                    **result,
+                    **routing_meta,
+                    "flow_used": "Flow 1: Policy Q&A (RAG)",
+                }
+        elif intent == "birthday_leave_decision":
             # Flow 2 (experimental): conversational decision support for birthday leave.
             parsed_request = parse_leave_request_message(question)
             employee_profile_used = _build_flow1_employee_context(user)
@@ -236,9 +278,10 @@ def run_policy_qa_query(question: str, user: dict):
                     ),
                     "sources": [],
                     "retrieved_chunks": [],
-                    "detected_intent": intent,
+                    **routing_meta,
                     "parsed_request_data": parsed_request,
                     "employee_profile_used": employee_profile_used,
+                    "flow_used": "Flow 2: Birthday Leave Decision Support",
                     "policy_summary": "Birthday Leave evaluation requires a requested leave date.",
                     "policy_sources": [],
                     "passed_conditions": [],
@@ -271,10 +314,75 @@ def run_policy_qa_query(question: str, user: dict):
                 "answer": flow2_answer,
                 "sources": flow2_sources,
                 "retrieved_chunks": decision_result.get("retrieved_chunks", []),
-                "detected_intent": intent,
+                **routing_meta,
                 "parsed_request_data": parsed_request,
                 "employee_profile_used": employee_profile_used,
                 **decision_result,
+            }
+        elif intent == "annual_leave_decision":
+            parsed_request = parse_leave_request_message(question)
+            employee_profile_used = _build_flow1_employee_context(user)
+            if not parsed_request.get("requested_start_date") or not parsed_request.get("requested_days"):
+                st.session_state.policy_qa_result = {
+                    "flow_mode": "annual_leave_decision",
+                    "answer": (
+                        "To check annual leave eligibility, please provide both requested days and start date "
+                        "(for example: Can I take 5 annual leave days on 2026-05-30?)."
+                    ),
+                    "decision_title": "Decision support result",
+                    "explanation": (
+                        "Please provide requested annual leave days and a start date to run the decision check."
+                    ),
+                    "next_action": "Provide requested annual leave days and start date.",
+                    "sources": [],
+                    "retrieved_chunks": [],
+                    **routing_meta,
+                    "parsed_request_data": parsed_request,
+                    "employee_profile_used": employee_profile_used,
+                    "flow_used": "Flow 2: Annual Leave Decision Support",
+                    "policy_summary": "Annual leave evaluation requires requested days and start date.",
+                    "policy_sources": [],
+                    "passed_conditions": [],
+                    "failed_conditions": [],
+                }
+                return
+
+            decision_result = check_annual_leave_eligibility(
+                employee_username=user.get("username", ""),
+                requested_leave_date=parsed_request["requested_start_date"],
+                requested_days=int(parsed_request.get("requested_days") or 1),
+            )
+            flow2_answer = _format_annual_flow2_chat_answer(parsed_request, decision_result)
+            flow2_sources = [
+                {
+                    "title": title,
+                    "category": "Policy Source",
+                    "content_type": "RAG Rule Extraction",
+                    "page_id": "",
+                    "attachment_name": "",
+                }
+                for title in decision_result.get("policy_sources", [])
+            ]
+            st.session_state.policy_qa_result = {
+                "flow_mode": "annual_leave_decision",
+                "answer": flow2_answer,
+                "sources": flow2_sources,
+                "retrieved_chunks": [],
+                **routing_meta,
+                "parsed_request_data": parsed_request,
+                "employee_profile_used": employee_profile_used,
+                **decision_result,
+            }
+        else:
+            result = ask_hr_knowledge_base(
+                question.strip(),
+                employee_context=_build_flow1_employee_context(user),
+                top_k=5,
+            )
+            st.session_state.policy_qa_result = {
+                **result,
+                **routing_meta,
+                "flow_used": "Flow 1: Policy Q&A (RAG)",
             }
     except FileNotFoundError:
         st.session_state.policy_qa_result = None
@@ -309,6 +417,52 @@ def deduplicate_sources(sources):
         unique_sources.append(source)
 
     return unique_sources
+
+
+def _build_dss_next_action(result: dict) -> str:
+    """Build concise next action guidance for DSS responses."""
+    explicit_next_action = str(result.get("next_action", "") or "").strip()
+    if explicit_next_action:
+        return f"Next action: {explicit_next_action}"
+
+    flow_mode = result.get("flow_mode")
+    decision_status = str(result.get("decision_status", "")).upper()
+    manager_required = bool(result.get("manager_approval_required", False))
+
+    if flow_mode == "annual_leave_decision":
+        if decision_status == "ELIGIBLE":
+            return "Next action: Submit annual leave request for manager approval."
+        return "Next action: Reduce requested days or choose alternative dates before submitting."
+
+    # Birthday DSS
+    if decision_status == "ELIGIBLE":
+        return "Next action: Submit birthday leave request for manager approval."
+    if decision_status == "PARTIALLY_ELIGIBLE":
+        if result.get("head_of_department_approval_required"):
+            return "Next action: Submit mixed leave request and obtain both manager and Head of Department approval."
+        if manager_required:
+            return "Next action: Submit mixed leave request; additional annual leave days require manager approval."
+        return "Next action: Submit mixed leave request."
+    if decision_status == "NOT_FULLY_ELIGIBLE":
+        return "Next action: Reduce additional annual leave days to fit available balance, then submit for approval."
+    return "Next action: Adjust requested leave details and try again."
+
+
+def _render_mixed_intent_policy_summary(result: dict):
+    """
+    For mixed-intent messages (policy + personal request), show a short policy summary
+    before the personal decision card.
+    """
+    if not result.get("mixed_intent_detected", False):
+        return
+
+    policy_summary = str(result.get("policy_summary", "") or "").strip()
+    if not policy_summary:
+        return
+
+    with st.container(border=True):
+        st.markdown("**Policy summary**")
+        st.write(policy_summary)
 
 
 def render_policy_qa_section(user: dict):
@@ -362,62 +516,105 @@ def render_policy_qa_section(user: dict):
     sources = deduplicate_sources(result.get("sources", []))
 
     if result.get("flow_mode") == "birthday_leave_decision":
+        _render_mixed_intent_policy_summary(result)
+
         with st.container(border=True):
             st.markdown(f"### {result.get('decision_title', 'Decision support result')}")
             st.write(result.get("explanation", "No explanation available."))
+            st.markdown(f"**{_build_dss_next_action(result)}**")
 
-        st.markdown("### Policy summary")
-        st.write(result.get("policy_summary", "No policy summary available."))
+        with st.expander("Evaluation details"):
+            st.markdown("**Policy summaries**")
+            st.write(result.get("policy_summary", "No policy summary available."))
+            if result.get("sales_june_policy_summary"):
+                st.write(result.get("sales_june_policy_summary"))
 
-        st.markdown("### Personal evaluation result")
-        st.write(f"Requested days: {result.get('requested_days', '-')}")
-        st.write(f"Birthday Leave days covered: {result.get('birthday_leave_days_covered', '-')}")
-        st.write(
-            f"Additional annual leave days needed: {result.get('additional_annual_leave_days_needed', '-')}"
-        )
-        st.write(f"Annual Leave Remaining: {result.get('annual_leave_remaining', '-')}")
-        st.write(
-            "Balance sufficient: "
-            f"{'Yes' if result.get('annual_leave_balance_sufficient') else 'No'}"
-        )
-        st.write(result.get("annual_leave_balance_message", ""))
-        st.write(
-            "Sales June restriction applies: "
-            f"{'Yes' if result.get('sales_june_restriction_applies') else 'No'}"
-        )
-        st.write(
-            "Head of Department approval required: "
-            f"{'Yes' if result.get('head_of_department_approval_required') else 'No'}"
-        )
-        if result.get("sales_june_policy_summary"):
-            st.write(result.get("sales_june_policy_summary"))
-        if result.get("additional_approval_message"):
-            st.write(result.get("additional_approval_message"))
-        st.write(
-            f"Manager approval required: {'Yes' if result.get('manager_approval_required') else 'No'}"
-        )
-        st.write(f"Decision status: {result.get('decision_status', '-')}")
+            st.markdown("**Decision fields**")
+            st.write(f"Requested days: {result.get('requested_days', '-')}")
+            st.write(f"Birthday Leave days covered: {result.get('birthday_leave_days_covered', '-')}")
+            st.write(
+                f"Additional annual leave days needed: {result.get('additional_annual_leave_days_needed', '-')}"
+            )
+            st.write(f"Annual Leave Remaining: {result.get('annual_leave_remaining', '-')}")
+            st.write(
+                "Balance sufficient: "
+                f"{'Yes' if result.get('annual_leave_balance_sufficient') else 'No'}"
+            )
+            st.write(
+                f"Manager approval required: {'Yes' if result.get('manager_approval_required') else 'No'}"
+            )
+            st.write(
+                "Head of Department approval required: "
+                f"{'Yes' if result.get('head_of_department_approval_required') else 'No'}"
+            )
+            st.write(f"Decision status: {result.get('decision_status', '-')}")
 
-        st.markdown("### Passed conditions")
-        passed_conditions = result.get("passed_conditions", [])
-        if not passed_conditions:
-            st.write("- None")
-        else:
-            for item in passed_conditions:
-                if isinstance(item, dict):
-                    st.markdown(f"- {item.get('details', item.get('description', ''))}")
-                else:
+            st.markdown("**Passed conditions**")
+            passed_conditions = result.get("passed_conditions", [])
+            if not passed_conditions:
+                st.write("- None")
+            else:
+                for item in passed_conditions:
+                    if isinstance(item, dict):
+                        st.markdown(f"- {item.get('details', item.get('description', ''))}")
+                    else:
+                        st.markdown(f"- {item}")
+
+            st.markdown("**Failed conditions**")
+            failed_conditions = result.get("failed_conditions", [])
+            if not failed_conditions:
+                st.write("- None")
+            else:
+                for item in failed_conditions:
+                    if isinstance(item, dict):
+                        st.markdown(f"- {item.get('details', item.get('description', ''))}")
+                    else:
+                        st.markdown(f"- {item}")
+    elif result.get("flow_mode") == "annual_leave_decision":
+        _render_mixed_intent_policy_summary(result)
+
+        with st.container(border=True):
+            st.markdown(f"### {result.get('decision_title', 'Decision support result')}")
+            st.write(result.get("explanation", "No explanation available."))
+            st.markdown(f"**{_build_dss_next_action(result)}**")
+
+        with st.expander("Evaluation details"):
+            st.markdown("**Policy summaries**")
+            st.write(result.get("policy_summary", "No policy summary available."))
+            if result.get("sales_june_policy_summary"):
+                st.write(result.get("sales_june_policy_summary"))
+
+            st.markdown("**Decision fields**")
+            st.write(f"Requested days: {result.get('requested_days', '-')}")
+            st.write(f"Annual Leave Remaining: {result.get('annual_leave_remaining', '-')}")
+            st.write(
+                "Balance sufficient: "
+                f"{'Yes' if result.get('annual_leave_balance_sufficient') else 'No'}"
+            )
+            st.write(
+                f"Manager approval required: {'Yes' if result.get('manager_approval_required') else 'No'}"
+            )
+            if "head_of_department_approval_required" in result:
+                st.write(
+                    "Head of Department approval required: "
+                    f"{'Yes' if result.get('head_of_department_approval_required') else 'No'}"
+                )
+            st.write(f"Decision status: {result.get('decision_status', '-')}")
+
+            st.markdown("**Passed conditions**")
+            passed_conditions = result.get("passed_conditions", [])
+            if not passed_conditions:
+                st.write("- None")
+            else:
+                for item in passed_conditions:
                     st.markdown(f"- {item}")
 
-        st.markdown("### Failed conditions")
-        failed_conditions = result.get("failed_conditions", [])
-        if not failed_conditions:
-            st.write("- None")
-        else:
-            for item in failed_conditions:
-                if isinstance(item, dict):
-                    st.markdown(f"- {item.get('details', item.get('description', ''))}")
-                else:
+            st.markdown("**Failed conditions**")
+            failed_conditions = result.get("failed_conditions", [])
+            if not failed_conditions:
+                st.write("- None")
+            else:
+                for item in failed_conditions:
                     st.markdown(f"- {item}")
     else:
         with st.container(border=True):
@@ -430,6 +627,14 @@ def render_policy_qa_section(user: dict):
             if unique_titles:
                 st.markdown("**Retrieved Document Titles**")
                 st.write(", ".join(unique_titles))
+
+    with st.expander("Routing details"):
+        st.write(f"Flow used: {result.get('flow_used', '-')}")
+        st.write(f"Detected intent: {result.get('detected_intent', '-')}")
+        st.write(f"Router used: {result.get('router_used', '-')}")
+        st.write(f"Confidence: {result.get('confidence', '-')}")
+        st.write(f"Mixed intent detected: {result.get('mixed_intent_detected', False)}")
+        st.write(f"Reason: {result.get('routing_reason', '-')}")
 
     with st.expander("Sources"):
         if not sources:
@@ -445,15 +650,12 @@ def render_policy_qa_section(user: dict):
                 )
                 st.write(source_line)
 
-    details_label = (
-        "Decision evaluation details"
-        if result.get("flow_mode") == "birthday_leave_decision"
-        else "Retrieval details / Debug view"
-    )
-    with st.expander(details_label):
-        if result.get("flow_mode") == "birthday_leave_decision":
+    with st.expander("Technical debug details"):
+        if result.get("flow_mode") in ("birthday_leave_decision", "annual_leave_decision"):
             st.markdown("**Detected intent**")
             st.write(result.get("detected_intent", "-"))
+            st.markdown("**Intent confidence/meta**")
+            st.json(result.get("detected_intent_meta", {}))
 
             st.markdown("**Extracted request data**")
             st.json(result.get("parsed_request_data", {}))
@@ -461,33 +663,34 @@ def render_policy_qa_section(user: dict):
             st.markdown("**Employee profile used**")
             st.json(result.get("employee_profile_used", {}))
 
-            st.markdown("**Birthday date used for evaluation**")
-            st.write(result.get("birthday_date_for_evaluation", "-"))
+            if result.get("flow_mode") == "birthday_leave_decision":
+                st.markdown("**Birthday date used for evaluation**")
+                st.write(result.get("birthday_date_for_evaluation", "-"))
 
-            st.markdown("**Allowed Birthday Leave window**")
-            st.write(
-                f"{result.get('allowed_window_start', '-')} to {result.get('allowed_window_end', '-')}"
-            )
+                st.markdown("**Allowed Birthday Leave window**")
+                st.write(
+                    f"{result.get('allowed_window_start', '-')} to {result.get('allowed_window_end', '-')}"
+                )
 
-            st.markdown("**Retrieved policy sources**")
-            for source in result.get("policy_sources", []):
-                st.write(f"- {source}")
+                st.markdown("**Retrieved policy sources**")
+                for source in result.get("policy_sources", []):
+                    st.write(f"- {source}")
 
-            st.markdown("**Sales June policy stacking**")
-            st.write(
-                f"Restriction applies: {'Yes' if result.get('sales_june_restriction_applies') else 'No'}"
-            )
-            st.write(
-                "Head of Department approval required: "
-                f"{'Yes' if result.get('head_of_department_approval_required') else 'No'}"
-            )
-            if result.get("sales_june_policy_summary"):
-                st.write(result.get("sales_june_policy_summary"))
-            if result.get("additional_approval_message"):
-                st.write(result.get("additional_approval_message"))
+                st.markdown("**Sales June policy stacking**")
+                st.write(
+                    f"Restriction applies: {'Yes' if result.get('sales_june_restriction_applies') else 'No'}"
+                )
+                st.write(
+                    "Head of Department approval required: "
+                    f"{'Yes' if result.get('head_of_department_approval_required') else 'No'}"
+                )
+                if result.get("sales_june_policy_summary"):
+                    st.write(result.get("sales_june_policy_summary"))
+                if result.get("additional_approval_message"):
+                    st.write(result.get("additional_approval_message"))
 
-            st.markdown("**Deterministic checks**")
-            st.json(result.get("deterministic_checks", {}))
+                st.markdown("**Deterministic checks**")
+                st.json(result.get("deterministic_checks", {}))
 
         retrieved_chunks = result.get("retrieved_chunks", [])
         if not retrieved_chunks:
@@ -561,6 +764,7 @@ def employee_portal(user):
     annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
 
     st.title("HR AI Assistant Portal")
+    st.caption("DSS Layer Prototype")
     st.write(f"Welcome, **{user['full_name']}**.")
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
@@ -650,6 +854,12 @@ def main_app():
 
     # Include username in profile for request creation.
     user = {**profile, "username": username}
+
+    st.info("🧪 Experimental DSS Version\nHybrid RAG + deterministic decision support is enabled.")
+    st.caption(
+        "This version can answer general HR policy questions and also evaluate selected personal leave "
+        "requests using employee profile data and deterministic rules."
+    )
 
     annual_remaining = get_leave_balance_value(user["employee_id"], "annual_leave", "remaining_days", 0)
 

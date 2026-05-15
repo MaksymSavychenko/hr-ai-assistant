@@ -14,7 +14,7 @@ def _parse_requested_days(text: str):
     # - "2 leave days"
     # - "1 day"
     match = re.search(
-        r"\b(\d+)\s+(?:additional\s+)?(?:vacation\s+|leave\s+)?days?\b",
+        r"\b(\d+)\s+(?:additional\s+)?(?:(?:annual\s+leave|vacation|leave)\s+)?days?\b",
         text,
         flags=re.IGNORECASE,
     )
@@ -30,8 +30,8 @@ def _parse_additional_days(text: str):
     - "7 days additional"
     """
     patterns = [
-        r"\b(\d+)\s+additional\s+(?:vacation\s+|leave\s+)?days?\b",
-        r"\b(\d+)\s+(?:vacation\s+|leave\s+)?days?\s+additional\b",
+        r"\b(\d+)\s+additional\s+(?:(?:annual\s+leave|vacation|leave)\s+)?days?\b",
+        r"\b(\d+)\s+(?:(?:annual\s+leave|vacation|leave)\s+)?days?\s+additional\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -68,6 +68,30 @@ def _parse_requested_date(text: str, default_year: int | None = None):
             except ValueError:
                 continue
 
+    return None
+
+
+def _parse_month_only_date(text: str, default_year: int | None = None):
+    """
+    Parse month-only expressions like "in June" and return first day of month.
+    Used as a fallback for annual leave decision requests.
+    """
+    if default_year is None:
+        default_year = date.today().year
+
+    month_only_match = re.search(rf"\bin\s+{MONTH_PATTERN}\b", text, flags=re.IGNORECASE)
+    if not month_only_match:
+        month_only_match = re.search(rf"\b{MONTH_PATTERN}\b", text, flags=re.IGNORECASE)
+    if not month_only_match:
+        return None
+
+    month_text = month_only_match.group(1)
+    for fmt in ("%B", "%b"):
+        try:
+            month_num = datetime.strptime(month_text, fmt).month
+            return date(default_year, month_num, 1).isoformat()
+        except ValueError:
+            continue
     return None
 
 
@@ -133,7 +157,18 @@ def parse_leave_request_message(message: str) -> dict:
     lowered = text.lower()
 
     birthday_mentioned = "birthday" in lowered
-    leave_type_candidate = "Birthday Leave" if birthday_mentioned else "Unknown"
+    annual_mentioned = (
+        "annual leave" in lowered
+        or "vacation days" in lowered
+        or "leave days" in lowered
+        or "vacation" in lowered
+    )
+    if birthday_mentioned:
+        leave_type_candidate = "Birthday Leave"
+    elif annual_mentioned:
+        leave_type_candidate = "annual_leave"
+    else:
+        leave_type_candidate = "Unknown"
 
     requested_days = _parse_requested_days(text)
     additional_days = _parse_additional_days(text)
@@ -148,13 +183,21 @@ def parse_leave_request_message(message: str) -> dict:
     date_mentions = _parse_date_mentions(text)
     requested_date = date_mentions[0] if date_mentions else _parse_requested_date(text)
     additional_start_date = _parse_additional_start_date(text, date_mentions)
+    if leave_type_candidate == "annual_leave" and not requested_date:
+        requested_date = _parse_month_only_date(text)
 
     missing_fields = []
     if birthday_mentioned and not requested_date:
         missing_fields.append("requested_leave_date")
+    if leave_type_candidate == "annual_leave":
+        if not requested_date:
+            missing_fields.append("requested_start_date")
+        if requested_days is None:
+            missing_fields.append("requested_days")
 
     return {
         "requested_date": requested_date,
+        "requested_start_date": requested_date,
         "additional_start_date": additional_start_date,
         "requested_days": requested_days,
         "additional_days": additional_days,

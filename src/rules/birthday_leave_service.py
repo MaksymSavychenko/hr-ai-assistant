@@ -251,6 +251,29 @@ def _to_user_condition_label(item: Dict, is_failed: bool = False) -> str:
     return str(item.get("description", "") or item.get("details", "") or "Policy condition check")
 
 
+def _find_existing_birthday_request_for_year(request_history: List[Dict], year: int) -> Dict | None:
+    """
+    Return one non-rejected Birthday Leave request for the target year, if present.
+    """
+    for item in request_history:
+        request_type = str(item.get("request_type", "")).strip().lower()
+        status = str(item.get("status", "")).strip()
+        leave_start = str(item.get("leave_start_date", "")).strip()
+        if request_type != "birthday_leave":
+            continue
+        if status.lower() == "rejected":
+            continue
+        if leave_start[:4] != str(year):
+            continue
+        return {
+            "request_type": item.get("request_type", ""),
+            "leave_date": leave_start,
+            "status": status,
+            "request_id": item.get("request_id", ""),
+        }
+    return None
+
+
 def check_birthday_leave_eligibility(
     employee_username: str,
     requested_leave_date: str,
@@ -304,6 +327,10 @@ def check_birthday_leave_eligibility(
     window_passed = _has_passed_condition(passed_conditions_detailed, "within_days_before_or_after")
     probation_passed = _has_passed_condition(passed_conditions_detailed, "is_true")
     duplicate_passed = _has_passed_condition(passed_conditions_detailed, "once_per_calendar_year")
+    duplicate_failed = any(
+        str(item.get("operator", "")) == "once_per_calendar_year"
+        for item in failed_conditions_detailed
+    )
 
     # Add explicit day-limit checks.
     if requested_days <= policy_max_days_per_year:
@@ -513,14 +540,46 @@ def check_birthday_leave_eligibility(
     birthday_human = _format_human_date(window_dates["birthday_date_for_evaluation"])
     window_start_human = _format_human_date(window_dates["window_start"])
     window_end_human = _format_human_date(window_dates["window_end"])
+    existing_birthday_request = _find_existing_birthday_request_for_year(request_history, target_year)
 
-    if decision_status == "NOT_ELIGIBLE" and not window_passed:
+    window_failed = not window_passed or any(
+        str(item.get("operator", "")) == "within_days_before_or_after"
+        for item in failed_conditions_detailed
+    )
+    max_days_failed = requested_days > policy_max_days_per_year or any(
+        str(item.get("operator", "")) == "max_birthday_days_per_year"
+        for item in failed_conditions_detailed
+    )
+    probation_failed = any(
+        str(item.get("operator", "")) == "is_true"
+        for item in failed_conditions_detailed
+    )
+    advance_notice_failed = any(
+        str(item.get("operator", "")) == "at_least_working_days_before"
+        for item in failed_conditions_detailed
+    )
+
+    if decision_status == "NOT_ELIGIBLE" and duplicate_failed:
+        explanation = "You have already used or have an approved Birthday Leave request for this calendar year."
+        if existing_birthday_request:
+            explanation = (
+                f"{explanation} Existing request: type {existing_birthday_request.get('request_type', '-')}, "
+                f"leave date {existing_birthday_request.get('leave_date', '-')}, "
+                f"status {existing_birthday_request.get('status', '-')}."
+            )
+    elif decision_status == "NOT_ELIGIBLE" and window_failed:
         explanation = (
-            f"Your requested leave date, {requested_human}, is outside the allowed Birthday Leave window. "
+            "Your requested date is outside the allowed Birthday Leave window. "
+            f"Requested date: {requested_human}. "
             f"Based on your birthday on {birthday_human}, Birthday Leave may be used from "
-            f"{window_start_human} to {window_end_human}. "
-            "These days may be requested as standard annual leave, subject to available balance and manager approval."
+            f"{window_start_human} to {window_end_human}."
         )
+    elif decision_status == "NOT_ELIGIBLE" and max_days_failed:
+        explanation = "Current policy allows only 1 Birthday Leave day per calendar year."
+    elif decision_status == "NOT_ELIGIBLE" and probation_failed:
+        explanation = "Birthday Leave is available only after completing the probation period."
+    elif decision_status == "NOT_ELIGIBLE" and advance_notice_failed:
+        explanation = "Birthday Leave requests must be submitted at least 3 working days in advance."
     elif decision_status == "NOT_ELIGIBLE":
         explanation = (
             "Birthday Leave cannot cover the requested days under current policy conditions. "
@@ -544,7 +603,7 @@ def check_birthday_leave_eligibility(
             "Manager approval is still required."
         )
 
-    if additional_approval_message:
+    if additional_approval_message and decision_status in ("PARTIALLY_ELIGIBLE", "NOT_FULLY_ELIGIBLE"):
         explanation = f"{explanation} {additional_approval_message}"
 
     passed_conditions = []
@@ -611,6 +670,7 @@ def check_birthday_leave_eligibility(
         "additional_approval_message": additional_approval_message,
         "additional_leave_start_date": additional_start_date_obj.isoformat() if additional_start_date_obj else "",
         "additional_leave_end_date": additional_end_date_obj.isoformat() if additional_end_date_obj else "",
+        "existing_birthday_request": existing_birthday_request or {},
         "eligible_for_requested_birthday_leave": eligible_for_requested_birthday_leave,
         "decision_status": decision_status,
         "decision_title": decision_title,
